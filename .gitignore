@@ -1,0 +1,15 @@
+# Recreated by setup on each computer.
+.venv/
+.cache/
+config.json
+.setup-model-state.json
+
+# Generated local files.
+__pycache__/
+*.py[cod]
+.DS_Store
+*.log
+
+# Keep personal libraries out of the source repository; demo/ remains tracked.
+/Photo/
+/Video/

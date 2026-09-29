@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1850" height="1350" viewBox="0 0 1850 1350">
+<rect width="1850" height="1350" fill="#F4F7FB"/>
+<text x="80" y="51" fill="#172A3F" font-size="46" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">从原媒体到文字搜索：一份 JSON 走遍设备</text>
+<text x="82" y="109" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">原件留在 Photo / Video；描述、对白与视频时间码都进入各自的 index.json。</text>
+<text x="88" y="193" fill="#4D647A" font-size="27" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">① 原始文件夹</text>
+<text x="658" y="193" fill="#4D647A" font-size="27" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">② 本机生成索引</text>
+<text x="1278" y="193" fill="#4D647A" font-size="27" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">③ 可复制的索引</text>
+<rect x="80" y="245" width="500" height="255" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="102" y="267" width="456" height="59" rx="12" fill="#DFF5F1"/>
+<text x="123" y="283" fill="#087E83" font-size="28" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">Photo/</text>
+<text x="121" y="353" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">2024/海边.jpg 等原始照片</text>
+<text x="121" y="399" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">可有多层子目录</text>
+<text x="121" y="445" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">生成 Photo/index.json</text>
+<rect x="80" y="523" width="500" height="328" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="102" y="545" width="456" height="59" rx="12" fill="#FFF1DC"/>
+<text x="123" y="561" fill="#AC6515" font-size="28" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">Video/</text>
+<text x="121" y="633" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">旅行.mp4 等原始视频</text>
+<text x="121" y="681" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">生成 Video/index.json</text>
+<text x="121" y="729" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">Resources/旅行.mp4/ 保留：</text>
+<text x="121" y="777" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">帧图、audio.wav、转录 JSON/SRT</text>
+<rect x="650" y="245" width="550" height="606" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="673" y="268" width="504" height="63" rx="12" fill="#E7F0FE"/>
+<text x="693" y="283" fill="#275DAB" font-size="28" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">media_index.py index</text>
+<text x="690" y="368" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">照片：Pillow 校正方向与缩放</text>
+<text x="690" y="428" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">视频：FFmpeg 默认每 30 秒抽一帧</text>
+<text x="690" y="488" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">视频：FFmpeg 提取 16 kHz 音轨</text>
+<text x="690" y="548" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">视觉：Ollama + qwen3.8:27b-mlx</text>
+<text x="690" y="608" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">语音：本地 Whisper 转录</text>
+<text x="690" y="668" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">合并：帧描述 + 同时间窗对白</text>
+<text x="690" y="728" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">增量更新；原文件不改动</text>
+<rect x="1270" y="245" width="500" height="255" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="1292" y="267" width="456" height="59" rx="12" fill="#DFF5F1"/>
+<text x="1312" y="283" fill="#087E83" font-size="28" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">Photo/index.json</text>
+<text x="1312" y="354" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">library_id + relative_path</text>
+<text x="1312" y="400" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">详细 description / OCR / tags</text>
+<text x="1312" y="446" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">每个照片根目录仅这一份索引</text>
+<rect x="1270" y="523" width="500" height="328" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="1292" y="545" width="456" height="59" rx="12" fill="#FFF1DC"/>
+<text x="1312" y="561" fill="#AC6515" font-size="28" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">Video/index.json</text>
+<text x="1312" y="635" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">relative_path + duration_ms</text>
+<text x="1312" y="683" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">frames[]：at_ms + 画面描述</text>
+<text x="1312" y="731" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">transcript[]：时间段 + 对白</text>
+<text x="1312" y="779" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">moments[]：画面与对白结合</text>
+<line x1="583" y1="393" x2="642" y2="393" stroke="#087E83" stroke-width="4"/>
+<polygon points="642,393 626,384 626,402" fill="#087E83"/>
+<line x1="583" y1="688" x2="642" y2="688" stroke="#AC6515" stroke-width="4"/>
+<polygon points="642,688 626,679 626,697" fill="#AC6515"/>
+<line x1="1205" y1="394" x2="1262" y2="394" stroke="#087E83" stroke-width="4"/>
+<polygon points="1262,394 1246,385 1246,403" fill="#087E83"/>
+<line x1="1205" y1="683" x2="1262" y2="683" stroke="#AC6515" stroke-width="4"/>
+<polygon points="1262,683 1246,674 1246,692" fill="#AC6515"/>
+<rect x="80" y="915" width="650" height="325" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="102" y="938" width="606" height="62" rx="12" fill="#EFE8FA"/>
+<text x="124" y="953" fill="#7147A1" font-size="28" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">④ 跨设备：只复制 JSON</text>
+<text x="124" y="1025" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">Photo/index.json + Video/index.json</text>
+<text x="124" y="1074" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">原件、帧图、音频、独立转录无需同步</text>
+<text x="124" y="1123" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">JSON 内已有可检索文字和时间码</text>
+<text x="124" y="1172" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">复制的索引不会凭空带来原件</text>
+<rect x="800" y="915" width="970" height="325" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="822" y="938" width="926" height="62" rx="12" fill="#E7F0FE"/>
+<text x="844" y="953" fill="#275DAB" font-size="28" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">⑤ 检索、定位与打开</text>
+<text x="845" y="1025" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">search / serve 读取一份或多份 index.json，按文字匹配；可选本机模型重排</text>
+<text x="845" y="1074" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">原件 = index.json 所在目录 / relative_path</text>
+<text x="845" y="1123" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">索引副本与原件分离时，用 --media-root 指定可访问的媒体根目录</text>
+<text x="845" y="1172" fill="#4D647A" font-size="22" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">照片打开原图；视频播放器跳到命中的帧或对白时间码</text>
+<line x1="735" y1="1077" x2="792" y2="1077" stroke="#7147A1" stroke-width="4"/>
+<polygon points="792,1077 776,1068 776,1086" fill="#7147A1"/>
+<text x="85" y="1283" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">没有原媒体访问权限时，搜索仍返回文件夹、文件相对路径和时间码，但不能打开原件。</text>
+</svg>

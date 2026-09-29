@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "vision_model": "qwen3.8:27b-mlx",
+  "ollama_url": "http://127.0.0.1:11434",
+  "timeout_seconds": 300,
+  "frame_interval_seconds": 30,
+  "max_frames": 0,
+  "checkpoint_every": 25,
+  "asr_backend": "auto",
+  "mlx_asr_model": "mlx-community/whisper-small-mlx",
+  "faster_whisper_model": "small",
+  "silence_threshold_db": -55.0,
+  "search_port": 8765,
+  "semantic_search": true
+}

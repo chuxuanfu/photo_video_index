@@ -1,0 +1,2 @@
+# CPU speech recognition for Intel Mac, Linux, and Windows.
+faster-whisper==1.2.1

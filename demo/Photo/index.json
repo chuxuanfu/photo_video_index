@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "library_id": "photo-7ef63b06c9774ac1",
+  "kind": "photo",
+  "generation": 3,
+  "generated_at": "2026-09-28T07:20:52Z",
+  "source_root_hint": "",
+  "access_roots": [],
+  "vision_model": "qwen3.8:27b-mlx",
+  "vision_prompt_version": "detail-v1",
+  "scan_limited": false,
+  "scan_incomplete": false,
+  "failed_files": [],
+  "assets": [
+    {
+      "id": "p-bc8b25ae8af5497f",
+      "relative_path": "2024/blue-box-red-ball.jpg",
+      "summary": "一张极简风格的平面图形，浅蓝背景上左侧为蓝色正方形，右侧为红色圆形，底部有浅绿横条。",
+      "description": "画面呈现极简主义风格的平面图形设计。背景为均匀的浅蓝色。画面左侧放置一个纯蓝色的正方形，其底边与画面下方的浅绿色水平横条相接。画面右侧放置一个纯红色的圆形，其底部同样接触浅绿色横条。蓝色正方形与红色圆形在水平方向上并列，中间留有空隙。整体构图简洁，色彩对比鲜明，无其他装饰或文字。",
+      "objects": [
+        "蓝色正方形",
+        "红色圆形",
+        "浅绿色横条"
+      ],
+      "spatial_relations": [
+        "蓝色正方形位于左侧",
+        "红色圆形位于右侧",
+        "浅绿色横条位于底部",
+        "正方形与圆形并列"
+      ],
+      "tags": [
+        "几何图形",
+        "平面设计",
+        "极简主义",
+        "蓝色",
+        "红色",
+        "正方形",
+        "圆形"
+      ],
+      "ocr_text": "",
+      "uncertainty_note": "",
+      "source_size": 12770,
+      "source_mtime_ns": 1790577479885028150,
+      "processing_signature": "photo|qwen3.8:27b-mlx|detail-v1"
+    }
+  ]
+}

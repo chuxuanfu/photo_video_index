@@ -1,0 +1,3 @@
+# Verified with Python 3.12; imageio-ffmpeg bundles the FFmpeg executable.
+Pillow==12.3.0
+imageio-ffmpeg==0.6.0

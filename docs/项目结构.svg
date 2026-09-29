@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1290" viewBox="0 0 1700 1290">
+<rect width="1700" height="1290" fill="#F4F7FB"/>
+<text x="82" y="56" fill="#172A3F" font-size="46" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">项目与资料库的文件结构</text>
+<text x="85" y="115" fill="#4D647A" font-size="24" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">项目可搬到新电脑；原始照片和视频可存于本机、外接盘或 NAS。</text>
+<rect x="80" y="190" width="750" height="940" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="104" y="214" width="702" height="72" rx="13" fill="#E7F0FE"/>
+<text x="130" y="233" fill="#275DAB" font-size="30" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">~/photo_video_index/   项目目录</text>
+<rect x="116" y="323" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="318" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">media_index.py</text>
+<text x="466" y="319" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">建索引、检索、网页预览的主程序</text>
+<line x1="143" y1="360" x2="777" y2="360" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="375" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="370" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">config.example.json</text>
+<text x="466" y="371" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">可用配置模板</text>
+<line x1="143" y1="412" x2="777" y2="412" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="427" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="422" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">config.json</text>
+<text x="466" y="423" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">安装器生成；按电脑调整参数</text>
+<line x1="143" y1="464" x2="777" y2="464" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="479" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="474" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">.setup-model-state.json</text>
+<text x="466" y="475" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">记录当前机器的模型选择</text>
+<line x1="143" y1="516" x2="777" y2="516" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="531" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="526" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">setup.command</text>
+<text x="466" y="527" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">Mac 双击安装入口</text>
+<line x1="143" y1="568" x2="777" y2="568" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="583" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="578" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">setup.sh / setup.cmd</text>
+<text x="466" y="579" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">Linux / Windows 安装入口</text>
+<line x1="143" y1="620" x2="777" y2="620" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="635" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="630" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">setup.ps1 / setup_support.py</text>
+<text x="466" y="631" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">平台检测与安装辅助逻辑</text>
+<line x1="143" y1="672" x2="777" y2="672" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="687" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="682" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">requirements-*.txt</text>
+<text x="466" y="683" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">固定 Python 依赖版本</text>
+<line x1="143" y1="724" x2="777" y2="724" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="739" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="734" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">试跑.command</text>
+<text x="466" y="735" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">交互选择 Photo / Video 试跑</text>
+<line x1="143" y1="776" x2="777" y2="776" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="791" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="786" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">README.md</text>
+<text x="466" y="787" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">快速使用说明</text>
+<line x1="143" y1="828" x2="777" y2="828" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="843" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="838" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">PROJECT_CONFIG.md</text>
+<text x="466" y="839" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">配置、依赖和架构详解</text>
+<line x1="143" y1="880" x2="777" y2="880" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="895" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="890" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">DEMO_RESULTS.md</text>
+<text x="466" y="891" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">公开样例的实际试跑结果</text>
+<line x1="143" y1="932" x2="777" y2="932" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="947" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="942" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">docs/</text>
+<text x="466" y="943" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">可编辑 SVG 与 PNG 结构图</text>
+<line x1="143" y1="984" x2="777" y2="984" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="999" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="994" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">tests/</text>
+<text x="466" y="995" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">核心行为检查</text>
+<line x1="143" y1="1036" x2="777" y2="1036" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="1051" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="1046" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">demo/</text>
+<text x="466" y="1047" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">可直接查看的非私人样例资料</text>
+<line x1="143" y1="1088" x2="777" y2="1088" stroke="#D8E1EA" stroke-width="1"/>
+<rect x="116" y="1103" width="10" height="10" rx="3" fill="#275DAB"/>
+<text x="144" y="1098" fill="#172A3F" font-size="21" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">.venv/</text>
+<text x="466" y="1099" fill="#4D647A" font-size="19" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">安装后生成；本机 Python 环境</text>
+<rect x="870" y="190" width="750" height="355" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="894" y="214" width="702" height="70" rx="13" fill="#DFF5F1"/>
+<text x="920" y="234" fill="#087E83" font-size="30" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">Photo/   照片资料库</text>
+<text x="920" y="311" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">2024/海边.jpg   ← 原件可在子文件夹</text>
+<text x="920" y="373" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">index.json          ← 这一份包含所有照片的文字索引</text>
+<text x="920" y="435" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">定位：Photo/ + relative_path</text>
+<rect x="870" y="570" width="750" height="560" rx="20" fill="#FFFFFF" stroke="#D8E1EA" stroke-width="2"/>
+<rect x="894" y="594" width="702" height="70" rx="13" fill="#FFF1DC"/>
+<text x="920" y="614" fill="#AC6515" font-size="30" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">Video/   视频资料库</text>
+<text x="920" y="688" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">旅行.mp4                 ← 原视频</text>
+<text x="920" y="737" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">index.json               ← 文字、帧时间、完整转录</text>
+<text x="920" y="786" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">Resources/旅行.mp4/      ← 仅源端保留</text>
+<text x="920" y="835" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">    frames/*.jpg            定时截取的关键帧</text>
+<text x="920" y="884" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">    audio.wav               提取的音轨</text>
+<text x="920" y="933" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">    transcript.json/.srt    独立转录文件</text>
+<text x="920" y="982" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">嵌套视频按原相对路径建立 Resources 子目录</text>
+<text x="920" y="1031" fill="#4D647A" font-size="23" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="400" dominant-baseline="hanging">只同步 Video/index.json；原件仍需另行访问</text>
+<text x="88" y="1178" fill="#7147A1" font-size="25" font-family="STHeiti, Heiti SC, PingFang SC, Arial, sans-serif" font-weight="700" dominant-baseline="hanging">跨设备只复制各资料库的 index.json；Resources 和原媒体无须随索引复制。</text>
+</svg>

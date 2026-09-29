@@ -1,0 +1,2 @@
+# Native Apple Silicon speech recognition.
+mlx-whisper==0.4.3

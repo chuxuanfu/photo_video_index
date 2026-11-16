@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "model_backend": "mlx-vlm",
+  "vision_model": ".models/Qwen3.8-27B-4bit",
+  "model_revision": "b935172e4bb5dcd0543774a34748fb92422e3027",
+  "mlx_vlm_url": "http://127.0.0.1:8080/v1",
+  "timeout_seconds": 300,
+  "frame_interval_seconds": 5,
+  "max_frames": 0,
+  "checkpoint_every": 1,
+  "asr_backend": "mlx",
+  "mlx_asr_model": ".models/whisper-large-v3-turbo",
+  "silence_threshold_db": -55,
+  "semantic_search": false
+}

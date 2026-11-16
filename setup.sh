@@ -1,121 +1,45 @@
 #!/usr/bin/env bash
+# Apple Silicon only. Everything is installed inside this checkout.
 set -euo pipefail
-
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
-export UV_CACHE_DIR="$PROJECT_DIR/.cache/uv"
-
-fail() { printf '安装失败：%s\n' "$*" >&2; exit 1; }
-note() { printf '\n==> %s\n' "$*"; }
-
-command -v curl >/dev/null 2>&1 || fail "系统缺少 curl。请先安装 curl。"
-command -v uname >/dev/null 2>&1 || fail "无法识别系统。"
-OS_NAME="$(uname -s)"
-CPU_ARCH="$(uname -m)"
-case "$OS_NAME/$CPU_ARCH" in
-  Darwin/arm64)
-    BACKEND=mlx
-    BACKEND_REQUIREMENTS=requirements-macos-arm64.txt
-    ;;
-  Darwin/x86_64|Linux/x86_64|Linux/aarch64)
-    BACKEND=faster
-    BACKEND_REQUIREMENTS=requirements-portable.txt
-    ;;
-  *)
-    fail "当前自动安装支持 macOS Apple Silicon/Intel、Linux x86_64/ARM64；检测到 ${OS_NAME}/${CPU_ARCH}。Windows 请双击 setup.cmd。"
-    ;;
-esac
-
-if [[ "$OS_NAME" == Darwin ]]; then
-  MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
-  [[ "$MAJOR" =~ ^[0-9]+$ ]] || fail "无法确定 macOS 版本。"
-  (( MAJOR >= 14 )) || fail "Ollama 当前要求 macOS 14 或更新版本。"
-fi
-
-note "平台：${OS_NAME} ${CPU_ARCH}；语音后端：${BACKEND}"
-note "准备 uv 和独立 Python 3.12 环境"
-UV_BIN="$(command -v uv 2>/dev/null || true)"
-if [[ -z "$UV_BIN" && -x "${HOME:?}/.local/bin/uv" ]]; then UV_BIN="$HOME/.local/bin/uv"; fi
-if [[ -z "$UV_BIN" && -x "${HOME:?}/.cargo/bin/uv" ]]; then UV_BIN="$HOME/.cargo/bin/uv"; fi
-if [[ -z "$UV_BIN" ]]; then
-  tmp_installer="$(mktemp)"
-  trap 'rm -f "$tmp_installer"' EXIT
-  curl --retry 3 --connect-timeout 15 -fsSL https://astral.sh/uv/install.sh -o "$tmp_installer"
-  sh "$tmp_installer"
-  rm -f "$tmp_installer"
-  trap - EXIT
-  UV_BIN="$(command -v uv 2>/dev/null || true)"
-  if [[ -z "$UV_BIN" && -x "$HOME/.local/bin/uv" ]]; then UV_BIN="$HOME/.local/bin/uv"; fi
-  if [[ -z "$UV_BIN" && -x "$HOME/.cargo/bin/uv" ]]; then UV_BIN="$HOME/.cargo/bin/uv"; fi
-  [[ -n "$UV_BIN" ]] || fail "uv 安装后仍未找到；请查看 https://docs.astral.sh/uv/getting-started/installation/"
-fi
-"$UV_BIN" python install --no-bin 3.12
-VENV_MARKER=.venv/.media-index-install-path
-if [[ ! -x .venv/bin/python ]] || [[ ! -f "$VENV_MARKER" ]] || [[ "$(cat "$VENV_MARKER")" != "$PROJECT_DIR" ]] || ! .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12)' >/dev/null 2>&1; then
-  "$UV_BIN" venv --clear .venv --python 3.12
-  printf '%s\n' "$PROJECT_DIR" > "$VENV_MARKER"
-fi
-PYTHON="$PROJECT_DIR/.venv/bin/python"
-"$UV_BIN" pip install --python "$PYTHON" -r requirements-common.txt -r "$BACKEND_REQUIREMENTS"
-DEFAULT_MODEL="$("$PYTHON" setup_support.py suggest-model --backend "$BACKEND")"
-"$PYTHON" setup_support.py prepare-config --default-model "${MEDIA_INDEX_MODEL:-$DEFAULT_MODEL}"
-"$PYTHON" setup_support.py link-ffmpeg
-
-note "准备 Ollama"
-find_ollama() {
-  local found
-  found="$(command -v ollama 2>/dev/null || true)"
-  if [[ -n "$found" ]]; then printf '%s\n' "$found"; return; fi
-  if [[ -x /Applications/Ollama.app/Contents/Resources/ollama ]]; then
-    printf '%s\n' /Applications/Ollama.app/Contents/Resources/ollama; return
-  fi
-  if [[ -x "$HOME/Applications/Ollama.app/Contents/Resources/ollama" ]]; then
-    printf '%s\n' "$HOME/Applications/Ollama.app/Contents/Resources/ollama"; return
-  fi
-}
-OLLAMA_BIN="$(find_ollama)"
-if [[ -z "$OLLAMA_BIN" ]]; then
-  tmp_installer="$(mktemp)"
-  trap 'rm -f "$tmp_installer"' EXIT
-  curl --retry 3 --connect-timeout 15 -fsSL https://ollama.com/install.sh -o "$tmp_installer"
-  sh "$tmp_installer"
-  rm -f "$tmp_installer"
-  trap - EXIT
-  OLLAMA_BIN="$(find_ollama)"
-  [[ -n "$OLLAMA_BIN" ]] || fail "Ollama 安装后仍未找到；请查看 https://ollama.com/download"
-fi
-
-if ! curl --max-time 3 -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-  if [[ "$OS_NAME" == Darwin && -d /Applications/Ollama.app ]]; then
-    open -a /Applications/Ollama.app || true
-  fi
-  if ! curl --max-time 3 -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-    mkdir -p .cache
-    nohup "$OLLAMA_BIN" serve > .cache/ollama-serve.log 2>&1 < /dev/null &
-  fi
-  for _ in {1..30}; do
-    if curl --max-time 3 -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then break; fi
-    sleep 1
-  done
-fi
-curl --max-time 3 -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 || fail "Ollama 没有启动。请打开 Ollama 应用后重跑；后台日志在 .cache/ollama-serve.log。"
-
-MODEL="$("$PYTHON" setup_support.py model-name)"
-if [[ "${MEDIA_INDEX_SKIP_MODELS:-0}" != 1 ]]; then
-  note "下载或检查视觉模型 ${MODEL}（首次需要联网；请预留模型和运行空间）"
-  if ! "$OLLAMA_BIN" list | awk 'NR > 1 {print $1}' | grep -Fxq "$MODEL"; then
-    "$OLLAMA_BIN" pull "$MODEL"
-  else
-    echo "视觉模型已存在，跳过下载。"
-  fi
-  note "下载或检查语音模型"
-  "$PYTHON" setup_support.py download-asr --backend "$BACKEND"
+unset PYTHONPATH PYTHONHOME UV_INDEX_URL UV_EXTRA_INDEX_URL UV_DEFAULT_INDEX UV_INDEX UV_FIND_LINKS UV_NO_INDEX UV_INSECURE_HOST UV_CONFIG_FILE UV_PYTHON_INSTALL_MIRROR UV_PYTHON_DOWNLOADS_JSON_URL
+export PYTHONNOUSERSITE=1
+fail() { printf '安装未完成：%s\n' "$*" >&2; exit 1; }
+[[ "$(uname -s)/$(uname -m)" == Darwin/arm64 ]] || fail '首发仅支持 Apple Silicon Mac；不提供云端或文字模型替代。'
+MAC_MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
+(( MAC_MAJOR >= 15 )) || fail '需要 macOS 15 或更新版本。'
+MEMORY_BYTES="$(sysctl -n hw.memsize)"
+(( MEMORY_BYTES >= 51539607552 )) || fail 'Qwen3.8 27B 视觉配置至少需要 48 GiB 统一内存，推荐 64 GiB；不会自动降级模型。'
+FREE_KIB="$(df -Pk "$PROJECT_DIR" | awk 'NR == 2 {print $4}')"
+if [[ -x .venv-mlx/bin/python && -x .local/tools/uv ]]; then
+  (( FREE_KIB >= 8388608 )) || fail '继续安装请保留至少 8 GiB 可用空间；模型的剩余下载空间会逐项检查。'
 else
-  echo "已按 MEDIA_INDEX_SKIP_MODELS=1 跳过模型下载；此时尚不能离线生成新索引。"
+  (( FREE_KIB >= 47185920 )) || fail '首次安装请预留至少 45 GiB 磁盘空间。'
 fi
-
-note "检查运行环境"
-"$PYTHON" setup_support.py verify --backend "$BACKEND"
-"$PYTHON" media_index.py doctor --model "$MODEL"
-echo
-echo "完成：可双击试跑.command，或用 .venv/bin/python media_index.py index --photo-root /你的/Photo --video-root /你的/Video"
+printf 'Apple Silicon · macOS %s · %.0f GiB 内存\n' "$MAC_MAJOR" "$(awk "BEGIN {print $MEMORY_BYTES/1073741824}")"
+umask 077
+mkdir -p .local/tools .local/downloads .cache/uv
+export UV_CACHE_DIR="$PROJECT_DIR/.cache/uv"
+export UV_PYTHON_INSTALL_DIR="$PROJECT_DIR/.local/python"
+export UV_PYTHON_BIN_DIR="$PROJECT_DIR/.local/bin"
+export UV_NO_CONFIG=1 UV_NO_PROGRESS=1 DO_NOT_TRACK=1 HF_HUB_DISABLE_TELEMETRY=1
+UV_BIN="$PROJECT_DIR/.local/tools/uv"
+UV_SHA=33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232
+if [[ ! -x "$UV_BIN" ]] || [[ "$("$UV_BIN" --version)" != 'uv 0.11.28'* ]]; then
+  ARCHIVE="$PROJECT_DIR/.local/downloads/uv-0.11.28.tar.gz"
+  curl -q --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --connect-timeout 20 -fL \
+    https://github.com/astral-sh/uv/releases/download/0.11.28/uv-aarch64-apple-darwin.tar.gz -o "$ARCHIVE"
+  [[ "$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')" == "$UV_SHA" ]] || fail 'uv 校验失败，未执行下载内容。'
+  tar -xzf "$ARCHIVE" -C .local/tools --strip-components=1 uv-aarch64-apple-darwin/uv
+fi
+"$UV_BIN" python install --no-bin 3.12.13
+if [[ -e .venv-mlx ]] && ! .venv-mlx/bin/python -I -c 'import sys; assert sys.version_info[:3] == (3,12,13)' >/dev/null 2>&1; then
+  mv .venv-mlx ".venv-mlx.incompatible-$(date -u +%Y%m%dT%H%M%SZ)"
+fi
+if [[ ! -x .venv-mlx/bin/python ]]; then
+  "$UV_BIN" venv .venv-mlx --python 3.12.13 --managed-python
+fi
+"$UV_BIN" pip install --python .venv-mlx/bin/python --require-hashes --only-binary :all: \
+  --index-url https://pypi.org/simple -r requirements-mlx.lock
+.venv-mlx/bin/python install_local.py "$@"

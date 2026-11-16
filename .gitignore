@@ -13,3 +13,16 @@ __pycache__/
 # Keep personal libraries out of the source repository; demo/ remains tracked.
 /Photo/
 /Video/
+
+# Private local MLX runtime, weights, trial data and machine-specific agent config.
+/.venv-mlx/
+/.models/
+/.local/
+/config.mlx.json
+/opencode.json
+
+# Personal setup notes and incompatible local environments.
+/LOCAL_MLX.md
+/.venv-mlx.incompatible-*/
+/index.json
+/.local-*/

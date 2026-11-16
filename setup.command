@@ -5,7 +5,7 @@ bash ./setup.sh
 result=$?
 echo
 if [[ $result -eq 0 ]]; then
-  echo "安装完成。现在可以双击「试跑.command」。"
+  echo "安装完成。现在可以双击「开始索引.command」。"
 else
   echo "安装未完成；请查看上方错误并重新双击本文件。"
 fi

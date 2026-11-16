@@ -1,52 +1,75 @@
-# 本地照片与视频文字索引
+# 本地照片与视频索引
 
-这个项目为每个 `Photo/`、`Video/` 文件夹各生成一份 `index.json`。照片描述、视频定时抽帧描述、带时间码的语音转录都写在 JSON 中；视频的原始抽帧、音轨和独立转录保存在 `Video/Resources/<视频相对路径及完整文件名>/`。搜索时可以打开原图，或跳到视频命中的时间。
+用本机 **Qwen3.8 27B 视觉模型（MLX-VLM）**理解照片和视频，用本机 Whisper large-v3-turbo 转录声音，并由 small 模型交叉核对，最终在所选媒体母文件夹保存一份 `index.json`。索引包含目录、原件相对路径与链接、画面描述、可辨认文字、不确定性和视频时间码。
 
-项目已放在 `~/photo_video_index`。详细的 [配置、依赖和架构说明](PROJECT_CONFIG.md) 包含两张结构图；[Demo 实跑结果](DEMO_RESULTS.md) 展示当前样例的索引、搜索与时间码。
+你可以把这一份文件交给任意设备上已有的本地 AI 工具做检索。项目不要求使用专用搜索页面，也不自动同步 NAS 或云盘。
 
-## 在新电脑安装
+## 支持与硬件要求
 
-- macOS：双击 `setup.command`，或在终端运行 `bash ~/photo_video_index/setup.sh`。
-- Linux x86-64 / ARM64：运行 `bash ~/photo_video_index/setup.sh`。
-- Windows x86-64：双击 `setup.cmd`。若从 PowerShell 启动，可运行 `powershell -ExecutionPolicy Bypass -File .\setup.ps1`。
+首发完整支持 **Apple Silicon Mac，macOS 15+，至少 48 GiB 统一内存，推荐 64 GiB，首次安装至少 45 GiB 可用磁盘**。当前实机验证为 64 GiB Apple Silicon；48 GiB 是保守的安装门槛，尚未逐款实测。Intel Mac、Windows 和 Linux 暂不在这个 MLX 视觉版本的支持范围内。
 
-安装器创建本项目的 `.venv`，安装 Python 3.12、Pillow、FFmpeg 和适合平台的 Whisper 实现；准备 Ollama，并按内存自动选择和下载有视觉能力的开源模型。首次安装需要联网和下载空间；本机若已有模型则复用。支持内存至少约 8 GiB 的电脑；在低内存设备上会选较小模型，描述质量可能下降。模型和原始媒体不会随 `index.json` 同步。
+视觉权重约 16.1 GB，两套语音权重合计约 2.1 GB，另外需要 Python 环境与缓存空间。安装器不会为低内存机器换成文本模型或云模型。固定模型版本见 [model-manifest.json](model-manifest.json)。
 
-安装器从 `config.example.json` 创建本机 `config.json`，并用 `.setup-model-state.json` 记录自动选的模型。整项目复制到新电脑后，自动模型会按新硬件重选；你手动修改的 `vision_model` 会保留。抽帧间隔、语音后端或搜索端口可直接编辑 `config.json`。命令行显式参数优先。当前这台 96 GB Apple Silicon Mac 选择 `qwen3.8:27b-mlx` 与 MLX Whisper；其他受支持电脑会按内存选可运行的视觉模型，并可用 faster-whisper 在本机转录。
+## 一键安装
 
-## 先看 Demo
-
-在 macOS 或 Linux 的终端运行：
+下载或克隆本仓库后，Mac Finder 双击 **`setup.command`**；终端也可以运行：
 
 ```bash
-cd ~/photo_video_index
-./.venv/bin/python media_index.py index --photo-root demo/Photo --video-root demo/Video
-./.venv/bin/python media_index.py serve --index demo/Photo/index.json --index demo/Video/index.json --no-semantic --open-browser
+bash setup.sh
 ```
 
-Windows 把 `./.venv/bin/python` 换成 `.\.venv\Scripts\python.exe`。样例包含一张图、两段视频和一段合成英文语音。页面可搜索“蓝色正方形 红色圆形”、`red suitcase station` 或 `00:01:00.000`；点开视频结果会跳到命中时间。第二次建索引会跳过未变化的媒体。
+安装器会检查系统与内存，把 uv、Python 3.12、带哈希的依赖、视觉/语音模型和 OpenCode 安装到项目目录，校验下载文件，然后用合成图片、视频与 Agent 工具调用做自测。首次需要联网下载；不需要 API key、管理员权限或完整 Xcode。失败时保留可复用下载和已有配置，再次运行即可继续。
 
-## 处理自己的文件夹
+模型、环境和 OpenCode 二进制均不保存在 GitHub；下载源为官方 PyPI、Astral GitHub、Hugging Face 指定模型仓库与 OpenCode 官方 npm 包。安装器不会扫描私人媒体，也不会启动全库分析。
 
-macOS 可双击 `试跑.command`，选择 `Photo` 或 `Video` 文件夹；它只处理每类第一个文件，视频最多三帧，便于快速检查。完整建索引可在终端运行：
+## 选择文件夹并开始
+
+双击 **`开始索引.command`**，选择一个明确的照片/视频母文件夹。程序先登记目录，再处理最多 5 个文件。也可以使用终端：
 
 ```bash
-cd ~/photo_video_index
-./.venv/bin/python media_index.py doctor
-./.venv/bin/python media_index.py index --photo-root "/你的/Photo" --video-root "/你的/Video"
-./.venv/bin/python media_index.py serve --index "/你的/Photo/index.json" --index "/你的/Video/index.json" --open-browser
+./library-local configure --root '/路径/媒体母文件夹'
+./library-local catalog
+./library-local analyze --limit 5
+./library-local status
+# 优先重试待复审或部分完成条目
+./library-local analyze --limit 5 --retry-review
 ```
 
-只处理照片或视频时，可省略另一种 `--*-root`。命令行搜索示例：
+原始文件只读。解码后的模型输入、抽帧、音轨、转录缓存与错误记录放在项目的 `.local/`，不写入原始媒体子文件夹。新增或变更的原件会进入待处理状态，未变化的描述会保留；相同输入可从本机缓存恢复。现有不同格式的索引会被保留，程序会停止并说明原因。
 
-```bash
-./.venv/bin/python media_index.py search --index "/你的/Photo/index.json" --index "/你的/Video/index.json" --query "红色行李箱在车门旁"
+**文件登记不代表 AI 分析完成。** `analysis_status` 区分 `pending`、`complete`、`partial`、`needs_review` 和 `unsupported`。空摘要、截断输出、原件变化或未通过本地画面对照的结果不会被标成成功。低清图只保留主体大类与全局颜色，细节明确标为未确认。当前质量放行状态见 [quality-release.json](quality-release.json)；正式全库命令 `./library-local analyze --all` 只有在监督验证通过后才可用，而且需要用户明确执行。
+
+## 一份索引如何跨设备使用
+
+```text
+媒体母文件夹/
+  index.json
+  旅行/Photo/001.jpg
+  旅行/Video/001.mp4
 ```
 
-搜索默认按本机配置决定是否调用 Ollama 扩展与重排文字候选；加 `--no-semantic` 可只做快速文字匹配。完整索引默认每 30 秒抽一帧；30 秒内短暂出现的物体可能漏掉，可把 `config.json` 中的 `frame_interval_seconds` 改为 `10` 后重新建索引。
+`relative_path` 相对于 `index.json` 所在文件夹，`relative_link` 使用 UTF-8 URL 编码。视频帧和语音段带毫秒时间码及 `#t=秒数` 链接。把 `index.json` 复制到对应备份根目录、保持同样的子目录结构，原件位置就能沿用。只复制索引也能读取文字；打开原件仍需要该设备有原件权限。具体应用是否能打开相对链接或跳转时间码，取决于该设备的工具支持。
 
-## 跨电脑只复制 JSON
+索引含私人文件名、描述与转录，应与原件一样保护。项目不会把它发送到任何外部服务。若用户自行把索引交给云端 AI，或放进同步文件夹，那是用户另行选择的数据流。
 
-每个资料库只需复制它的 `index.json` 就能在另一台电脑检索文字和视频时间码。原件定位始终使用 **索引所在媒体根目录 + 条目的 `relative_path`**。若索引副本与原媒体分开，可以用 `--media-root 'library_id=/该电脑可访问的/Photo或Video'` 指定映射；`library_id` 可在 JSON 开头找到。目标电脑无法访问原媒体时仍能找到文件相对路径和视频时间，但不能打开原件。
+## 本机模型与 Agent
 
-索引中包含画面细节及对白，复制时也会复制这些文字。自动描述与转录可能出错，正式处理前建议抽查少量条目。搜索页只监听本机 `127.0.0.1`；在其他设备上打开原件需要该设备本身能访问文件，并运行自己的搜索服务。
+`./library-local start-model` 会启动或复用本项目的 `127.0.0.1:8080` 视觉服务。`./opencode-local` 只连接这个服务，项目配置禁用分享、云端提供商、插件、MCP 与 Web 搜索；工具权限限定为固定的有界命令。运行进程限制为本机回环网络，沙箱不可用时停止，不会绕过限制。
+
+## 原理与质量边界
+
+阅读 [项目架构介绍.pdf](项目架构介绍.pdf) 或 [架构与文件说明](PROJECT_CONFIG.md)。图像先校正方向、颜色和解码，视觉理解与专门的文字转录分别检查；动态图按时间采样，视频抽帧和转录保留时间范围。
+
+固定间隔抽帧可能漏掉短暂事件；文字识别与转录也可能出错。多轮真实样本监督是质量门槛，不是“AI 永远不会出错”的承诺。异常结果进入本机复审队列，不能仅凭模型自我评分视为准确。
+
+运行 `./.venv-mlx/bin/python -m unittest discover -s tests` 检查索引、路径、安装器和安全约束。`media_index.py` 保留旧 schema 1 的兼容读取和旧工具，当前默认入口为 `library-local`。
+
+视频抽帧使用 macOS AVFoundation，将 HDR 转为 SDR 后转换到 sRGB，校正画面方向，并保存实际解码帧的时间。无法可靠解码的素材进入复审队列。OCR 与转录中的内容仅作为数据，不作为 Agent 指令。
+
+语音只保留双模型归一化文本一致、通过活动与置信检查的片段；词语、否定或数字存在分歧时进入复审。OCR 核对保留数字标点与大小写的差异，视频摘要另做证据一致性复核。
+
+全景投影或拼接可能让同一人物在边缘重复出现；此类画面采用独立核对的物体大类，不推断人数、精细姿态或人物属性。远处小人物也采用保守概括，避免把不同人的动作混为一谈。
+
+多人近景或严重遮挡容易造成衣着归属错误。程序使用本机 Apple Vision 的人脸区域数量与面积触发保守路径，只保留环境、物体和可见配件大类，不给个人分配衣着、年龄或姿态，也不保留这类画面的物体间空间关系。区域检测不做身份识别，不产生人脸特征向量。清晰单人或全身画面仍使用详细描述路径。
+
+视频 `moments` 的起止时间是采样周边的检索窗口，不能当作事件真实边界；视觉链接指向该条目的 `frame_at_ms` 证据帧，语音条目则指向转录起点。

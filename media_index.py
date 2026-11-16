@@ -27,7 +27,7 @@ import urllib.request
 import uuid
 import wave
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -40,6 +40,7 @@ PROMPT_VERSION = "detail-v1"
 ASR_MODEL = "mlx-community/whisper-small-mlx"
 FASTER_WHISPER_MODEL = "small"
 OLLAMA_URL = "http://127.0.0.1:11434"
+MLX_VLM_URL = "http://127.0.0.1:8080/v1"
 VISION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -85,14 +86,14 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
         "schema_version", "vision_model", "ollama_url", "timeout_seconds",
         "frame_interval_seconds", "max_frames", "checkpoint_every", "asr_backend",
         "mlx_asr_model", "faster_whisper_model", "silence_threshold_db",
-        "search_port", "semantic_search",
+        "search_port", "semantic_search", "model_backend", "mlx_vlm_url", "model_revision",
     }
     unknown = set(data) - allowed
     if unknown:
         raise IndexErrorUser(f"config.json 含未知字段：{', '.join(sorted(unknown))}")
     if data.get("schema_version", 1) != 1 or isinstance(data.get("schema_version", 1), bool):
         raise IndexErrorUser("config.json 只支持 schema_version=1")
-    strings = ("vision_model", "ollama_url", "mlx_asr_model", "faster_whisper_model")
+    strings = ("vision_model", "ollama_url", "mlx_asr_model", "faster_whisper_model", "mlx_vlm_url", "model_revision")
     for key in strings:
         if key in data and (not isinstance(data[key], str) or not data[key].strip()):
             raise IndexErrorUser(f"config.json 的 {key} 必须是非空字符串")
@@ -110,6 +111,8 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
         raise IndexErrorUser("config.json 的 asr_backend 只能是 auto、mlx、faster、whispercpp 或 skip")
     if "semantic_search" in data and type(data["semantic_search"]) is not bool:
         raise IndexErrorUser("config.json 的 semantic_search 必须是 true 或 false")
+    if data.get("model_backend", "ollama") not in {"ollama", "mlx-vlm"}:
+        raise IndexErrorUser("model_backend 只能是 ollama 或 mlx-vlm")
     return data
 
 
@@ -198,7 +201,7 @@ def read_index(path: Path, expected_kind: str | None = None) -> dict[str, Any] |
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise IndexErrorUser(f"无法读取 {path}：{exc}") from exc
-    if not isinstance(data, dict) or data.get("schema_version") != 1 or data.get("kind") not in {"photo", "video"}:
+    if not isinstance(data, dict) or (data.get("schema_version"), data.get("kind")) not in {(1, "photo"), (1, "video"), (2, "library")}:
         raise IndexErrorUser(f"索引版本或类型不受支持：{path}")
     if expected_kind and data["kind"] != expected_kind:
         raise IndexErrorUser(f"{path} 是 {data['kind']} 索引，不能作为 {expected_kind} 使用")
@@ -207,7 +210,10 @@ def read_index(path: Path, expected_kind: str | None = None) -> dict[str, Any] |
     for asset in data["assets"]:
         if not isinstance(asset, dict):
             raise IndexErrorUser(f"索引资产格式错误：{path}")
-        validate_relative_path(asset.get("relative_path"), data["kind"])
+        kind = asset.get("kind") if data["kind"] == "library" else data["kind"]
+        if kind not in {"photo", "video"}:
+            raise IndexErrorUser("总索引条目必须标明 photo 或 video")
+        validate_relative_path(asset.get("relative_path"), kind)
     return data
 
 
@@ -229,7 +235,32 @@ def write_index(path: Path, data: dict[str, Any]) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def local_model_url(value: str) -> str:
+    """Use a literal loopback address; never send a payload via a proxy/redirect."""
+    url = urllib.parse.urlsplit(value)
+    if url.scheme != "http" or url.hostname != "127.0.0.1" or url.username or url.password or url.query or url.fragment:
+        raise IndexErrorUser("模型地址必须是 http://127.0.0.1:<端口> 的本机地址")
+    try:
+        if not url.port:
+            raise ValueError
+    except ValueError as exc:
+        raise IndexErrorUser("模型地址必须包含有效端口") from exc
+    return value.rstrip("/")
+
+
+class _NoModelRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise IndexErrorUser("本机模型返回了重定向；为保护媒体隐私已拒绝")
+
+
+def local_model_open(request, timeout: float):
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoModelRedirect()).open(request, timeout=timeout)
+
+
 def ollama_request(messages: list[dict[str, Any]], schema: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    # Retain this entry point for the existing index/search pipeline.
+    if getattr(args, "model_backend", "ollama") == "mlx-vlm":
+        return mlx_vlm_request(messages, schema, args)
     body = {
         "model": args.model,
         "messages": messages,
@@ -239,17 +270,53 @@ def ollama_request(messages: list[dict[str, Any]], schema: dict[str, Any], args:
         "options": {"temperature": 0, "num_ctx": 8192},
     }
     request = urllib.request.Request(
-        args.ollama_url.rstrip("/") + "/api/chat",
+        local_model_url(args.ollama_url) + "/api/chat",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=args.timeout) as response:
+        with local_model_open(request, args.timeout) as response:
             result = json.load(response)
         return json.loads(result["message"]["content"])
     except (urllib.error.URLError, TimeoutError, KeyError, json.JSONDecodeError) as exc:
         raise IndexErrorUser(f"本机 Ollama 调用失败：{exc}。请先运行 doctor，并确认 Ollama 正在运行。") from exc
+
+
+def mlx_vlm_request(messages: list[dict[str, Any]], schema: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    import jsonschema
+    converted = []
+    for message in messages:
+        content = [{"type": "text", "text": message["content"]}]
+        content += [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + encoded}} for encoded in message.get("images", [])]
+        converted.append({"role": message["role"], "content": content})
+    body = {
+        "model": args.model, "messages": converted, "stream": False,
+        "temperature": 0, "max_tokens": getattr(args, "response_tokens", 1536), "enable_thinking": getattr(args, "quality_thinking", False),
+        "response_format": {"type": "json_schema", "json_schema": {"name": "media_index", "strict": True, "schema": schema}},
+    }
+    if getattr(args, "quality_thinking", False):
+        body["reasoning_effort"] = "medium"
+        body["thinking_budget"] = getattr(args, "quality_thinking_budget", 1536)
+    if getattr(args, "quality_max_pixels", None):
+        body["max_pixels"] = args.quality_max_pixels
+    request = urllib.request.Request(
+        local_model_url(args.mlx_vlm_url) + "/chat/completions",
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with local_model_open(request, args.timeout) as response:
+            result = json.load(response)
+        choice = result["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise IndexErrorUser("MLX-VLM 输出被截断；索引未接受此结果")
+        data = json.loads(choice["message"]["content"])
+        jsonschema.validate(data, schema)
+        return data
+    except (urllib.error.URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError, jsonschema.ValidationError) as exc:
+        # Model/service errors may contain input details: keep them out of the terminal.
+        raise IndexErrorUser("本机 MLX-VLM 调用失败；请检查本机服务，不会回退到云端") from exc
 
 
 def image_bytes(path: Path) -> bytes:
@@ -356,16 +423,22 @@ def video_info(ffmpeg: str, path: Path) -> tuple[int, bool]:
     return round(duration * 1000), has_audio
 
 
-def extract_frame(ffmpeg: str, source: Path, at_ms: int, output: Path) -> None:
+def extract_frame(ffmpeg: str, source: Path, at_ms: int, output: Path) -> dict:
+    """Color-managed native frame; failure never falls back to wrong HDR colors."""
     output.parent.mkdir(parents=True, exist_ok=True)
-    run_checked([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{at_ms / 1000:.3f}", "-i", str(source), "-frames:v", "1", "-q:v", "2", str(output)], f"视频抽帧 {at_ms / 1000:g} 秒")
-    if not output.is_file() or output.stat().st_size == 0:
-        raise IndexErrorUser(f"抽帧文件为空：{output}")
+    helper = Path(__file__).resolve().with_name('native_frames.py')
+    result = run_checked([sys.executable, str(helper), str(source), str(at_ms), str(output)],
+                         '本机色彩管理抽帧', timeout=120)
+    metadata = json.loads(result.stdout)
+    if not output.is_file() or output.stat().st_size == 0 or metadata.get('dynamic_range') != 'forceSDR':
+        raise IndexErrorUser('本机抽帧验证失败')
+    output.with_suffix('.decode.json').write_text(json.dumps(metadata, indent=2)+'\n')
+    return metadata
 
 
 def extract_audio(ffmpeg: str, source: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    run_checked([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(output)], "提取音频")
+    run_checked([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-map_metadata", "-1", "-vn", "-ac", "1", "-ar", "16000", "-af", "aresample=async=1:first_pts=0", "-c:a", "pcm_s16le", str(output)], "提取音频")
     if not output.is_file() or output.stat().st_size <= 44:
         raise IndexErrorUser(f"提取的音频为空：{output}")
 
@@ -529,6 +602,8 @@ def video_summary(frames: list[dict[str, Any]], transcript: list[dict[str, Any]]
 
 def processing_signature(kind: str, args: argparse.Namespace) -> str:
     fields = [kind, args.model, PROMPT_VERSION]
+    if getattr(args, "model_backend", "ollama") != "ollama":
+        fields += [args.model_backend, getattr(args, "model_revision", "")]
     if kind == "video":
         backend = select_asr_backend(args)
         fields += [str(args.frame_interval), str(args.max_frames), args.asr, args.asr_model, args.whisper_model or "", "silence-v1", str(args.silence_threshold_db)]
@@ -550,8 +625,9 @@ def index_video(root: Path, path: Path, relative: str, identifier: str, args: ar
     if not ffmpeg:
         raise IndexErrorUser("缺少 ffmpeg；先运行 setup.command 再试视频")
     duration_ms, has_audio = video_info(ffmpeg, path)
-    resources = resource_directory(root, PurePosixPath(relative).parts)
-    frames_dir = resource_directory(root, (*PurePosixPath(relative).parts, "frames"))
+    resources_root = getattr(args, "resources_root", None) or root
+    resources = resource_directory(resources_root, PurePosixPath(relative).parts)
+    frames_dir = resource_directory(resources_root, (*PurePosixPath(relative).parts, "frames"))
     samples = list(range(0, duration_ms, round(args.frame_interval * 1000))) or [0]
     partial = bool(args.max_frames and len(samples) > args.max_frames)
     if args.max_frames:
@@ -559,7 +635,7 @@ def index_video(root: Path, path: Path, relative: str, identifier: str, args: ar
     frames = []
     for number, at_ms in enumerate(samples):
         frame_file = frames_dir / f"{number:06d}.jpg"
-        safe_resource_file(frame_file, root)
+        safe_resource_file(frame_file, resources_root)
         log(f"  抽帧与描述：{at_ms / 1000:g} 秒")
         extract_frame(ffmpeg, path, at_ms, frame_file)
         details = describe_image(frame_file, args, video_frame=True)
@@ -567,7 +643,7 @@ def index_video(root: Path, path: Path, relative: str, identifier: str, args: ar
     transcript: list[dict[str, Any]] = []
     if has_audio:
         audio = resources / "audio.wav"
-        safe_resource_file(audio, root)
+        safe_resource_file(audio, resources_root)
         extract_audio(ffmpeg, path, audio)
         transcript = transcribe_audio(audio, resources, args)
     else:
@@ -588,15 +664,27 @@ def index_root(root_value: str, kind: str, args: argparse.Namespace) -> Path:
     root = Path(root_value).expanduser().resolve()
     if not root.is_dir():
         raise IndexErrorUser(f"找不到 {kind} 文件夹：{root}")
-    index_path = root / "index.json"
+    output_dir = getattr(args, "output_dir", None)
+    output_root = root
+    if output_dir:
+        output_root = Path(output_dir).expanduser().resolve() / kind.title()
+        if within(output_root, root):
+            raise IndexErrorUser("独立试跑输出目录必须在原媒体根目录以外")
+        if output_root.is_symlink():
+            raise IndexErrorUser("独立输出目录不能是符号链接")
+        output_root.mkdir(parents=True, exist_ok=True)
+    index_path = output_root / "index.json"
     old = read_index(index_path, kind)
+    source_index = read_index(root / "index.json", kind) if output_dir else old
+    if old and output_dir and old.get("source_root_hint") != str(root):
+        raise IndexErrorUser("此试跑输出已属于另一个媒体根目录；请选择新输出目录")
     old_assets = {asset["relative_path"]: asset for asset in old["assets"]} if old else {}
     files = source_files(root, kind)
     live_paths = {relative for relative, _ in files}
     selected = files[:args.limit] if args.limit else files
     if not selected and not old:
         raise IndexErrorUser(f"{root} 中没有可识别的 {kind} 原件")
-    library_id = old["library_id"] if old else f"{kind}-{uuid.uuid4().hex[:16]}"
+    library_id = old["library_id"] if old else source_index["library_id"] if source_index else f"{kind}-{uuid.uuid4().hex[:16]}"
     by_fingerprint: dict[tuple[int, int], list[dict[str, Any]]] = {}
     for asset in old_assets.values():
         key = (asset.get("source_size"), asset.get("source_mtime_ns"))
@@ -622,6 +710,8 @@ def index_root(root_value: str, kind: str, args: argparse.Namespace) -> Path:
             "generation": generation, "generated_at": utc_now(), "source_root_hint": str(root),
             "access_roots": old.get("access_roots", []) if old else [],
             "vision_model": args.model, "vision_prompt_version": PROMPT_VERSION,
+            "vision_backend": getattr(args, "model_backend", "ollama"),
+            "model_revision": getattr(args, "model_revision", ""),
             "scan_limited": scan_limited, "scan_incomplete": incomplete,
             "failed_files": failed_files or [], "assets": assets,
         }
@@ -644,7 +734,9 @@ def index_root(root_value: str, kind: str, args: argparse.Namespace) -> Path:
         identifier = prior["id"] if prior else moved[0]["id"] if len(moved) == 1 else f"{kind[0]}-{uuid.uuid4().hex[:16]}"
         log(f"[{number}/{len(selected)}] 处理：{relative}")
         try:
-            asset = index_photo(path, relative, identifier, args) if kind == "photo" else index_video(root, path, relative, identifier, args)
+            item_args = argparse.Namespace(**vars(args))
+            item_args.resources_root = output_root
+            asset = index_photo(path, relative, identifier, item_args) if kind == "photo" else index_video(root, path, relative, identifier, item_args)
         except Exception as exc:
             publish(incomplete=True, failed_files=[{"relative_path": relative, "error": str(exc)[:500]}])
             raise
@@ -678,6 +770,7 @@ class Hit:
     text: str
     at_ms: int | None
     score: float = 0
+    duration_ms: int | None = None
 
 
 def searchable_text(item: dict[str, Any]) -> str:
@@ -698,7 +791,10 @@ def load_hits(index_paths: list[str]) -> tuple[list[Hit], dict[str, dict[str, An
     for value in index_paths:
         path = Path(value).expanduser()
         if path.is_dir():
-            paths.extend(path.rglob("index.json"))
+            if (path / "index.json").is_file():
+                paths.append(path / "index.json")
+            else:
+                paths.extend(path.rglob("index.json"))
         elif path.is_file():
             paths.append(path)
         else:
@@ -711,27 +807,33 @@ def load_hits(index_paths: list[str]) -> tuple[list[Hit], dict[str, dict[str, An
     for path in unique:
         data = read_index(path)
         assert data is not None
-        library_id, kind = data["library_id"], data["kind"]
+        library_id, library_kind = data["library_id"], data["kind"]
         if library_id in libraries and libraries[library_id]["index_path"] != path:
             raise IndexErrorUser(f"重复的 library_id：{library_id}；请只保留同一资料库的一份索引")
         libraries[library_id] = {
-            "index_path": path, "kind": kind, "source_root_hint": data.get("source_root_hint", ""),
+            "index_path": path, "kind": library_kind, "source_root_hint": data.get("source_root_hint", ""),
             "scan_limited": bool(data.get("scan_limited")),
             "scan_incomplete": bool(data.get("scan_incomplete")),
             "failed_files": data.get("failed_files", []),
+            "catalog_complete": data.get("catalog_complete", False),
+            "summary": data.get("summary", {}) if isinstance(data.get("summary", {}), dict) else {},
         }
         for asset in data["assets"]:
+            kind = asset["kind"] if library_kind == "library" else library_kind
             relative = asset["relative_path"]
+            name_text = relative + " " if library_kind == "library" else ""
             if kind == "photo":
-                hits.append(Hit(path, library_id, kind, relative, "photo", searchable_text(asset), None))
+                hits.append(Hit(path, library_id, kind, relative, "photo", name_text + searchable_text(asset), None))
             else:
-                hits.append(Hit(path, library_id, kind, relative, "video", searchable_text(asset), 0))
+                duration = asset.get("duration_ms")
+                duration = duration if type(duration) is int else None
+                hits.append(Hit(path, library_id, kind, relative, "video", name_text + searchable_text(asset), 0, duration_ms=duration))
                 for frame in asset.get("frames", []):
-                    hits.append(Hit(path, library_id, kind, relative, "frame", searchable_text(frame), int(frame["at_ms"])))
+                    hits.append(Hit(path, library_id, kind, relative, "frame", name_text + searchable_text(frame), int(frame["at_ms"]), duration_ms=duration))
                 for row in asset.get("transcript", []):
-                    hits.append(Hit(path, library_id, kind, relative, "speech", searchable_text(row), int(row["start_ms"])))
+                    hits.append(Hit(path, library_id, kind, relative, "speech", name_text + searchable_text(row), int(row["start_ms"]), duration_ms=duration))
                 for moment in asset.get("moments", []):
-                    hits.append(Hit(path, library_id, kind, relative, "moment", searchable_text(moment), int(moment.get("frame_at_ms", moment["start_ms"]))))
+                    hits.append(Hit(path, library_id, kind, relative, "moment", name_text + searchable_text(moment), int(moment.get("frame_at_ms", moment["start_ms"])), duration_ms=duration))
     return hits, libraries
 
 
@@ -757,6 +859,21 @@ def lexical_score(query: str, text: str) -> float:
 
 
 def search_hits(hits: list[Hit], query: str, limit: int, args: argparse.Namespace | None = None) -> list[Hit]:
+    clock = re.fullmatch(r"(?:(\d+):)?([0-5]?\d):([0-5]\d)(?:[.,](\d{1,3}))?", query.strip())
+    if clock:
+        hours, minutes, seconds, fraction = clock.groups()
+        at_ms = ((int(hours or 0) * 60 + int(minutes)) * 60 + int(seconds)) * 1000 + int((fraction or "0").ljust(3, "0"))
+        groups: dict[tuple[str, str], list[Hit]] = {}
+        for hit in hits:
+            if hit.kind == "video" and hit.at_ms is not None and hit.duration_ms is not None and at_ms < hit.duration_ms:
+                groups.setdefault((hit.library_id, hit.relative_path), []).append(hit)
+        result = []
+        priority = {"frame": 0, "speech": 1, "moment": 2, "video": 3}
+        for rows in groups.values():
+            nearest = min(rows, key=lambda hit: (abs(hit.at_ms - at_ms), priority.get(hit.source, 4)))
+            result.append(replace(nearest, source="timecode", at_ms=at_ms, score=100.0,
+                                  text=f"跳转到 {time_label(at_ms)}；最近已描述样本：{time_label(nearest.at_ms)}。 {nearest.text}"))
+        return result[:limit]
     semantic = bool(args and getattr(args, "semantic", False))
     phrases = [query]
     if semantic:
@@ -862,7 +979,10 @@ def command_search(args: argparse.Namespace) -> None:
 def render_page(query: str, results: list[Hit], roots: dict[str, Path], libraries: dict[str, dict[str, Any]]) -> bytes:
     notices = []
     for library_id, data in libraries.items():
-        if data["scan_limited"]:
+        if data["kind"] == "library":
+            counts = data.get("summary", {})
+            notices.append(f"目录已登记 {counts.get('photos', 0)} 张照片、{counts.get('videos', 0)} 条视频；AI 已分析 {counts.get('photos_analyzed', 0)} 张照片、{counts.get('videos_analyzed', 0)} 条视频。待分析 {counts.get('pending_analysis', 0)} 项，当前流程尚未接入的格式 {counts.get('unsupported_analysis_formats', 0)} 项。")
+        elif data["scan_limited"]:
             notices.append(f"{html.escape(library_id)} 只处理了试跑选中的部分文件")
         if data["scan_incomplete"]:
             notices.append(f"{html.escape(library_id)} 上次扫描中断；已保存此前进度，可重新运行脚本继续")
@@ -892,8 +1012,10 @@ def serve(args: argparse.Namespace) -> None:
     hits, libraries = load_hits(args.index)
     roots = parse_roots(args.media_root)
     allowed = {library_id: set() for library_id in libraries}
+    asset_kinds = {library_id: {} for library_id in libraries}
     for hit in hits:
         allowed[hit.library_id].add(hit.relative_path)
+        asset_kinds[hit.library_id][hit.relative_path] = hit.kind
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -921,8 +1043,9 @@ def serve(args: argparse.Namespace) -> None:
                 if not library or relative not in allowed[library_id]:
                     self.send_error(404)
                     return
+                media_kind = asset_kinds[library_id][relative]
                 try:
-                    media = resolve_media(roots.get(library_id, library["index_path"].parent), relative, library["kind"])
+                    media = resolve_media(roots.get(library_id, library["index_path"].parent), relative, media_kind)
                 except IndexErrorUser:
                     self.send_error(400)
                     return
@@ -931,7 +1054,7 @@ def serve(args: argparse.Namespace) -> None:
                     return
                 media_url = "/media?" + urllib.parse.urlencode({"lib": library_id, "path": relative})
                 if parsed.path == "/view":
-                    if library["kind"] == "photo":
+                    if media_kind == "photo":
                         viewer = f'<img src="{html.escape(media_url, quote=True)}" style="max-width:100%;max-height:85vh" alt="原图">'
                     else:
                         raw_time = query.get("t", ["0"])[0]
@@ -1036,7 +1159,14 @@ def doctor(args: argparse.Namespace) -> None:
         log(f"faster-whisper：已安装，但当前会话不能启动（{exc}）")
     log(f"自动语音转录后端：{select_asr_backend(args)}")
     try:
-        with urllib.request.urlopen(args.ollama_url.rstrip("/") + "/api/tags", timeout=3) as response:
+        if getattr(args, "model_backend", "ollama") == "mlx-vlm":
+            url = local_model_url(args.mlx_vlm_url) + "/models"
+            with local_model_open(url, 3) as response:
+                data = json.load(response)
+            names = [row.get("id") for row in data.get("data", [])]
+            log(f"MLX-VLM：已连接；配置模型 {'✓' if args.model in names else '请检查本机加载名称'}")
+            return
+        with local_model_open(local_model_url(args.ollama_url) + "/api/tags", 3) as response:
             data = json.load(response)
         names = [item.get("name") for item in data.get("models", [])]
         log(f"Ollama：已连接；模型 {args.model} {'✓' if args.model in names else '未显示，请检查 ollama list'}")
@@ -1052,10 +1182,14 @@ def parser(config: dict[str, Any] | None = None) -> argparse.ArgumentParser:
     common_model = argparse.ArgumentParser(add_help=False)
     common_model.add_argument("--model", default=config.get("vision_model", MODEL))
     common_model.add_argument("--ollama-url", default=config.get("ollama_url", OLLAMA_URL))
+    common_model.add_argument("--model-backend", choices=["ollama", "mlx-vlm"], default=config.get("model_backend", "ollama"))
+    common_model.add_argument("--mlx-vlm-url", default=config.get("mlx_vlm_url", MLX_VLM_URL))
+    common_model.add_argument("--model-revision", default=config.get("model_revision", ""), help="固定的模型权重修订，参与增量处理签名")
     common_model.add_argument("--timeout", type=int, default=config.get("timeout_seconds", 300))
     index = sub.add_parser("index", parents=[common_model], help="分析原件并写入各自文件夹的 index.json")
     index.add_argument("--photo-root", help="Photo 文件夹路径")
     index.add_argument("--video-root", help="Video 文件夹路径")
+    index.add_argument("--output-dir", help="独立试跑输出目录，内部仍分别保存 Photo/index.json、Video/index.json；原媒体目录只读")
     index.add_argument("--limit", type=int, default=0, help="每类最多处理前 N 个文件；0=全部，试跑建议 1")
     index.add_argument("--checkpoint-every", type=int, default=config.get("checkpoint_every", 25), help="每成功处理 N 个文件先保存一次索引；默认 25")
     index.add_argument("--frame-interval", type=float, default=config.get("frame_interval_seconds", 30), help="视频抽帧间隔（秒）")

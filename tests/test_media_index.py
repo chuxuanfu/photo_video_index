@@ -1,5 +1,7 @@
 import argparse
 import array
+import io
+import json
 import shutil
 import sys
 import tempfile
@@ -39,6 +41,47 @@ class IndexTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
+
+    def test_isolated_trial_preserves_original_index_and_library_id(self):
+        root = self.base / "OriginalPhoto"
+        root.mkdir()
+        (root / "sample.jpg").write_bytes(b"synthetic")
+        with mock.patch.object(app, "describe_image", return_value=details()):
+            app.index_root(str(root), "photo", options())
+            original = (root / "index.json").read_bytes()
+            output = self.base / "Trial"
+            args = options(output_dir=str(output), model_backend="mlx-vlm", model_revision="fixed")
+            app.index_root(str(root), "photo", args)
+            first = app.read_index(output / "Photo/index.json")
+            app.index_root(str(root), "photo", args)
+        self.assertEqual((root / "index.json").read_bytes(), original)
+        self.assertEqual(first["library_id"], json.loads(original)["library_id"])
+        self.assertEqual(first["generation"], app.read_index(output / "Photo/index.json")["generation"])
+        hits, _ = app.load_hits([str(output / "Photo/index.json")])
+        self.assertEqual(app.locate(hits[0], {first["library_id"]: root}), (root / "sample.jpg").resolve())
+        with self.assertRaises(app.IndexErrorUser):
+            app.index_root(str(root), "photo", options(output_dir=str(root / "unsafe")))
+
+    def test_model_url_refuses_external_destinations_and_redirects(self):
+        for value in ["https://127.0.0.1:8080/v1", "http://example.com:8080/v1", "http://127.0.0.1.evil:8080", "http://user@127.0.0.1:8080", "http://127.0.0.1:8080/?x=1", "http://127.0.0.1:99999"]:
+            with self.assertRaises(app.IndexErrorUser):
+                app.local_model_url(value)
+        self.assertEqual(app.local_model_url(app.MLX_VLM_URL), app.MLX_VLM_URL)
+        with self.assertRaises(app.IndexErrorUser):
+            app._NoModelRedirect().redirect_request(None, None, 307, "redirect", {}, "https://example.com")
+
+    def test_mlx_vision_payload_and_schema_failure(self):
+        args = options(model_backend="mlx-vlm", mlx_vlm_url=app.MLX_VLM_URL)
+        response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(details())}}]}
+        with mock.patch.object(app, "local_model_open", return_value=io.BytesIO(json.dumps(response).encode())) as request:
+            result = app.ollama_request([{"role": "user", "content": "synthetic", "images": ["YWJj"]}], app.VISION_SCHEMA, args)
+        self.assertEqual(result["objects"], details()["objects"])
+        sent = json.loads(request.call_args.args[0].data)
+        self.assertEqual(sent["messages"][0]["content"][1]["image_url"]["url"], "data:image/jpeg;base64,YWJj")
+        response["choices"][0]["message"]["content"] = '{"summary":"invalid"}'
+        with mock.patch.object(app, "local_model_open", return_value=io.BytesIO(json.dumps(response).encode())):
+            with self.assertRaises(app.IndexErrorUser):
+                app.ollama_request([{"role": "user", "content": "synthetic"}], app.VISION_SCHEMA, args)
 
     def test_photo_relative_location_incremental_and_copy(self):
         root = self.base / "Photo"

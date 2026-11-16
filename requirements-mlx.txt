@@ -1,0 +1,12 @@
+# Production runtime for Apple Silicon; Python 3.12.13, macOS 15+.
+mlx==0.32.4
+mlx-vlm==0.7.12
+mlx-whisper==0.4.3
+Pillow==12.3.0
+imageio-ffmpeg==0.6.0
+jsonschema==4.26.0
+rawpy==0.28.0
+pyobjc-framework-Vision==13.0
+webrtcvad-wheels==2.0.14
+pyobjc-framework-AVFoundation==13.0
+numpy==2.5.5

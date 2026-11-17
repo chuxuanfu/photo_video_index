@@ -98,11 +98,11 @@ class LocalInstallTests(unittest.TestCase):
     def test_summary_time_range_comes_from_media_not_generated_prose(self):
         import grounded_index
         frames=[{'at_ms':0,'summary':'水中有人','description':'蓝色水面与水花'}]
-        with patch.object(grounded_index,'call',side_effect=[{'summary':'00:03.00-00:02.70 人物在水中游泳'}, {'summary':'蓝色水面中有人游泳，周围有水花。'}, {'approved':True,'issues':[]}]) as model:
+        with patch.object(grounded_index,'call',side_effect=AssertionError('Portable evidence summaries must not generate new timestamps or actions')) as model:
             summary=grounded_index.summarize(frames,[],2700,object())
         self.assertTrue(summary.startswith('00:00:00.000–00:00:02.700：'))
         self.assertNotIn('00:03',summary)
-        self.assertEqual(model.call_count,3)
+        self.assertEqual(model.call_count,0)
 
 
 if __name__=='__main__':unittest.main()

@@ -16,7 +16,7 @@ ROOT_FILES = {'.gitignore','AGENTS.md','README.md','PROJECT_CONFIG.md','DEMO_RES
  'media_index.py','media_library.py','media_decode.py','native_frames.py','single_library.py','index_pipeline.py','grounded_index.py','local_ocr.py',
  'speech_quality.py','local_runtime.py','local_workflow.py','quality_suite.py','install_local.py','setup_support.py',
  'setup.sh','setup.command','setup.cmd','setup.ps1','opencode-local','library-local','试跑.command','开始索引.command','项目架构介绍.pdf'}
-REVIEWED_ARTIFACTS = {'tests/fixtures/local-test-speech.mp3': 'd7783561d6ce664d217d6952a53782916a39a03c91e92e4a2358f517a173d56f', '项目架构介绍.pdf': 'df3d09620fca151c8736ae5b5ea6b4c651ce66335517e54aa9e0c9cfcfe43a58'}
+REVIEWED_ARTIFACTS = {'tests/fixtures/local-test-speech.mp3': 'd7783561d6ce664d217d6952a53782916a39a03c91e92e4a2358f517a173d56f', '项目架构介绍.pdf': '017372dd88c736230416a43741ea41fa0751041600e2e97afdb122ce8402801e'}
 SECRETS = re.compile(rb'(?:gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY)')
 EMAILS = re.compile(rb'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
 HOMES = re.compile(rb'/' + rb'Users/[^\s\x00`"<>]+')

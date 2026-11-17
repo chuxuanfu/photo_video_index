@@ -1,5 +1,6 @@
 {
-  "profile": "grounded-v9",
+  "profile": "grounded-v21",
+  "processing_signature": "6ad9cb5e76328c09cb89c50aa65936348cc43254847490ee280343d67b578e1b",
   "bulk_processing_ready": false,
-  "reason": "Ten diverse supervised groups and current-code regression validation are still in progress."
+  "reason": "Independent novel-case supervision found an incorrect visual category despite local self-review. Generalization, key-content recall and review burden are not established; bulk processing remains blocked."
 }

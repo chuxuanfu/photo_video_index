@@ -31,6 +31,18 @@ def clamp_transcript(rows,duration):
     return accepted,corrections
 
 
+
+
+def apply_analysis_status(record):
+    candidates=[record,*record.get('frames',[]),*record.get('animation_frames',[])]
+    limited=any(row.get('verification',{}).get('severely_dark_policy') or row.get('verification',{}).get('main_class_blind_agreement') is False for row in candidates)
+    limited=limited or any(row.get('verification',{}).get('detail_review_exhausted') for row in candidates)
+    if limited:
+        record.setdefault('verification',{}).update(visual_coverage='limited',visual_coverage_limitation='Some visual classes or details were withheld; retained facts do not establish complete content recall.')
+    record['index_status']='partial' if limited or record.get('audio_analysis',{}).get('status')=='needs_review' else 'complete'
+    return record
+
+
 def analyze(root, asset, destination, args, *, interval_ms=5000, progress=lambda phase: None):
     source = app.resolve_media(root, asset['relative_path'], asset['kind'])
     if source is None:
@@ -107,7 +119,8 @@ def analyze(root, asset, destination, args, *, interval_ms=5000, progress=lambda
     after = source.stat()
     if sha256(source) != before or after.st_size != stat.st_size or after.st_mtime_ns != stat.st_mtime_ns:
         raise app.IndexErrorUser('Original changed during analysis; result rejected')
-    record.update(index_status='partial' if record.get('audio_analysis',{}).get('status')=='needs_review' else 'complete', original_unchanged=True)
+    apply_analysis_status(record)
+    record['original_unchanged']=True
     temporary = cached.with_suffix('.tmp')
     temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2)+'\n')
     temporary.replace(cached)

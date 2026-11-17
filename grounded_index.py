@@ -14,7 +14,7 @@ import unicodedata
 import media_index as app
 
 PROJECT = Path(__file__).resolve().parent
-PROFILE = 'grounded-v9'
+PROFILE = 'grounded-v21'
 SCHEMA = copy.deepcopy(app.VISION_SCHEMA)
 for key, minimum, maximum in [('summary', 4, 220), ('description', 10, 700), ('uncertainty_note', 0, 320), ('ocr_text', 0, 1)]:
     SCHEMA['properties'][key].update(minLength=minimum, maxLength=maximum)
@@ -100,8 +100,22 @@ def record_has_artifacts(record):
 
 def normalize_record(record):
     """Remove generation formatting, never correct literal OCR spelling."""
+    component_scene='面包板' in json.dumps(record,ensure_ascii=False)
+    season_pattern=r'初春|盛夏|初秋|深秋|隆冬|春季|春天|春日|夏季|夏天|夏日|秋季|秋天|秋日|冬季|冬天|冬日'
+    mask_pattern=r'(?:浅蓝色|深蓝色|蓝绿色|白色|黑色|蓝色|红色|绿色|黄色|粉色|灰色|紫色|浅色|深色)(?:的)?口罩'
+    factual=' '.join([record['summary'],record['description'],*record['objects'],*record['spatial_relations'],*record['tags']])
+    calendar_removed=bool(re.search(season_pattern,factual));mask_color_removed=bool(re.search(mask_pattern,factual))
     def conservative_text(value):
         value = clean_generated_text(value)
+        value=re.sub(season_pattern,'',value)
+        value=re.sub(mask_pattern,'口罩',value)
+        if component_scene:
+            # Small electronic parts are visually confusable at indexing scale.
+            # Keep the workbench and wiring searchable without guessing types.
+            value=re.sub(r'排针|针排|排线|跳线|电阻(?:器)?|电容(?:器)?|二极管|三极管|晶体管|集成电路|微控制器|单片机|蜂鸣器|传感器','电子元件',value)
+            value=value.replace('长方体物体','长方形物体').replace('长方体','长方形物体')
+            value=re.sub(r'电子元件(?:[、和与及]电子元件)+','电子元件',value)
+            value=re.sub(r'[^。！？；]*?(?:线缆|导线|连接线)[^。！？；]*(?:延伸|通向|穿过|连接到|连到)[^。！？；]*[。！？；]?', '画面可见线缆。', value)
         remote=r'(?:更)?远(?:处|方|景)[^。！？.!?；;，,]*?(?:[，,]\s*)?(?:有|可见)[^。！？.!?；;，,]*?(?:人物|人影|人员|人)(?:分别|均|都|正|正在)?(?:[，,]\s*)?(?:位于|在|坐在|趴在|站在|躺在|靠在|漂浮在|乘坐|穿着|戴着|旁边|附近|身边)[^。！？.!?；;，,]*'
         value=re.sub(remote,lambda m:m[0] if re.search(r'前景|近处|近景',m[0]) else '远处有人',value)
         for label in ('年轻人','年长者','中年人','老年人'):
@@ -122,6 +136,7 @@ def normalize_record(record):
         for value in record[key]:
             value = conservative_text(re.sub(r'^\s*(?:/(?:objects|tags|spatial_relations)/|[>•]\s*)', '', value))
             value=value.rstrip('，,；; ')
+            if component_scene and key=='spatial_relations' and re.search(r'线缆|导线|连接线',value):continue
             if key=='spatial_relations' and re.search(r'远(?:处|方|景)',value) and '人' in value:continue
             if re.search(r'远(?:处|方|景)',value) and not re.search(r'雕塑|雕像|人像|海报|绘画|照片',value) and re.search(r'人物|人影|人员|人$',value):
                 if key=='spatial_relations':continue
@@ -134,6 +149,10 @@ def normalize_record(record):
                 items.append(value)
         record[key] = items
     record['uncertainty_note'] = clean_generated_text(record['uncertainty_note'])
+    if calendar_removed and '季节未作可靠判断' not in record['uncertainty_note']:record['uncertainty_note']+=' 季节未作可靠判断。'
+    if mask_color_removed and '口罩颜色未作可靠判断' not in record['uncertainty_note']:record['uncertainty_note']+=' 口罩颜色未作可靠判断。'
+    if component_scene and '细小电子元件只标大类' not in record['uncertainty_note']:
+        record['uncertainty_note'] += ' 细小电子元件只标大类；线材端点关系未确认。'
     return record
 
 
@@ -155,6 +174,12 @@ def describe_coarse(path,args):
     result=call('这是低清晰度图像。只选择画面占主要区域的主体大类和有充分像素证据的背景大类。不要选择只占极小区域的配件或细节，不判断人物数量、服饰、肢体、表情、姿态。主体大类与图像形式分开判断：若清楚可见人脸轮廓，可选“人脸”，绘制形式另选“插画”；若主体是卡牌，可选“卡牌”，表格形式另选“图表”。无法辨认具体主体时才用“插画”或“图表”作主类。无需确认具体角色、表情、牌面或物种。模糊或无法区分就选“其他/无法确认”。不要转录文字。主类可选：'+json.dumps(categories,ensure_ascii=False)+'；背景可选：'+json.dumps(scenes,ensure_ascii=False)+'；图像形式可选：'+json.dumps(forms,ensure_ascii=False),[input_path],schema,args)
     review={'type':'object','properties':{'main_supported':{'type':'boolean'},'scene_supported':{'type':'boolean'},'form_supported':{'type':'boolean'}},'required':['main_supported','scene_supported','form_supported'],'additionalProperties':False}
     checked=call('看图严格核对主体、背景与图像形式三个粗略标签。人脸简笔画的“人脸”主体与“插画”形式可以同时成立；卡牌资料的“卡牌”主体与“图表”形式可以同时成立。不能因具体角色或细节不可确认就否定正确大类。主要物体不能是微小配件；背景只在有直接视觉证据时支持。不要因常识或蓝色色块猜场景。候选：'+json.dumps(result,ensure_ascii=False),[input_path],review,args,reasoning=True)
+    # Classify afresh without exposing the proposed answer: a candidate-only
+    # yes/no review can repeat an ambiguous person/animal mistake.
+    blind_schema={'type':'object','properties':{'subject':{'type':'string','enum':categories},'direct_pixel_evidence':{'type':'string','maxLength':500},'ambiguous_between_classes':{'type':'boolean'}},'required':['subject','direct_pixel_evidence','ambiguous_between_classes'],'additionalProperties':False}
+    blind=call('独立辨认这张低清图的主要主体大类，不提供先前候选。不要读取或使用叠加字幕来猜主体，只依靠可见轮廓、结构、材质等像素证据。直立姿态、邻近物体、字幕中的人称或模糊暗色团块不足以证明主体是人物。人物、动物、玩偶、服装或雕像难以区分时选其他/无法确认，ambiguous_between_classes=true。明确说出直接看到的区分类别证据，不能仅说像某类。不要猜具体身份、物种或动作目的。可选大类：'+json.dumps(categories,ensure_ascii=False),[input_path],blind_schema,args,reasoning=True)
+    if blind['ambiguous_between_classes'] or not blind['direct_pixel_evidence'].strip() or blind['subject']!=result['main_subject']:
+        checked['main_supported']=False
     subjects=[]
     if checked['main_supported'] and result['main_subject']!='其他/无法确认':subjects.append(result['main_subject'])
     if checked['form_supported'] and result['visual_form']!='其他/无法确认' and result['visual_form'] not in subjects:subjects.append(result['visual_form'])
@@ -184,13 +209,15 @@ def describe_coarse(path,args):
             'objects':subjects,'spatial_relations':[],'tags':subjects+colors,'ocr_text':'',
             'uncertainty_note':'分辨率限制了细节可靠性；具体数量、服饰、肢体和动作阶段未作确定判断。',
             'verification':{'profile':PROFILE,'local_visual_review':'coarse nouns checked','supervisor_visual_review':'not_performed',
-                            'low_detail':True,'colors_source':'pixel palette; colors are global, not assigned to individual objects','original_model_inputs_local':True}}
+                            'low_detail':True,'main_class_blind_agreement':checked['main_supported'],'colors_source':'pixel palette; colors are global, not assigned to individual objects','original_model_inputs_local':True}}
+    if not checked['main_supported']:
+        record['uncertainty_note']+=' 主体大类未获得独立一致确认，已省略。'
     if result['has_readable_text']:
         ocr=transcribe_visible_text(path,args)
         record['ocr_text']=ocr['text']
         record['ocr_verification']={k:v for k,v in ocr.items() if k not in {'text','native_candidates'}}
         if ocr['uncertainty']:record['uncertainty_note']+=' 文字识别：'+ocr['uncertainty']
-    Path(path).with_suffix('.coarse-audit.json').write_text(json.dumps({'primary':result,'review':checked,'supported_subjects':subjects,'global_pixel_colors':colors},ensure_ascii=False,indent=2)+'\n')
+    Path(path).with_suffix('.coarse-audit.json').write_text(json.dumps({'primary':result,'review':checked,'blind_classification':blind,'supported_subjects':subjects,'global_pixel_colors':colors},ensure_ascii=False,indent=2)+'\n')
     return record
 
 
@@ -238,10 +265,23 @@ CROWDED_PERSON_DETAILS=re.compile(r'男|女|少年|青年|儿童|婴儿|老人|�
 
 def crowded_details_present(record):
     values=[record['summary'],record['description'],*record['objects'],*record['spatial_relations'],*record['tags']]
-    return any(CROWDED_PERSON_DETAILS.search(value) for value in values)
+    # An explicit existential reference is not a total-person count.
+    # All garment, pose and other-person-detail checks still apply.
+    return any(CROWDED_PERSON_DETAILS.search(value.replace('其中一名人物','人物').replace('其中一位人物','人物').replace('其中一人','人物')) for value in values)
+
+
+class GroupNeedsReview(app.IndexErrorUser):
+    pass
 
 
 def describe_crowded_scene(path,args,*,readable_hint=False):
+    try:
+        return _describe_crowded_reviewed(path,args,readable_hint=readable_hint)
+    except GroupNeedsReview:
+        return describe_group_inventory(path,args,readable_hint=readable_hint)
+
+
+def _describe_crowded_reviewed(path,args,*,readable_hint=False):
     """Keep environment/color evidence; never bind ambiguous garments to people."""
     schema=copy.deepcopy(SCHEMA);schema['properties']['objects']['maxItems']=8
     schema['properties']['accessories']={'type':'array','maxItems':3,'items':{'type':'string','enum':['眼镜','帽子','口罩']}}
@@ -257,8 +297,8 @@ def describe_crowded_scene(path,args,*,readable_hint=False):
         history.append({'approved':qa['approved'],'issues':qa['issues']})
         if qa['approved'] and not qa['issues']:break
         record=normalize_record(qa['revised']) if qa['revised'] else None
-    else:raise app.IndexErrorUser('Close-group environment requires review')
-    if record is None or crowded_details_present(record):raise app.IndexErrorUser('Unverified person attributes rejected')
+    else:raise GroupNeedsReview('Close-group environment requires review')
+    if record is None or crowded_details_present(record):raise GroupNeedsReview('Unverified person attributes rejected')
     record['spatial_relations']=[]
     accessories=list(dict.fromkeys(record.pop('accessories')))
     record['objects']=list(dict.fromkeys(['人物',*record['objects'],*accessories]))
@@ -280,7 +320,7 @@ def canonical_ocr(text):
     return ''.join(c for c in normalized if not c.isspace() and not unicodedata.category(c).startswith('C'))
 
 
-def transcribe_visible_text(path, args):
+def _transcribe_visible_text(path, args):
     from PIL import Image
     proposals = native_ocr(path)
     # Dedicated full-image reading plus larger local views. Proposals are untrusted.
@@ -356,7 +396,310 @@ def transcribe_visible_text(path, args):
             'native_candidates': proposals}
 
 
-def describe_grounded(path, args, *, frame=False):
+def numeric_ocr_key(text):
+    """Keep numeric layout glyphs distinct while tolerating width/spacing."""
+    normalized=unicodedata.normalize('NFC',text)
+    normalized=''.join(chr(ord(c)-0xFEE0) if 0xFF01<=ord(c)<=0xFF5E else c for c in normalized)
+    normalized=normalized.replace('￥','¥')
+    normalized=normalized.translate(str.maketrans({'’':"'",'‘':"'",'“':'"','”':'"','–':'-','—':'-'}))
+    return ''.join(c for c in normalized if not c.isspace() and not unicodedata.category(c).startswith('C'))
+
+def enforce_numeric_ocr_consensus(result,full_lines):
+    """An extra postcondition; never invent a decimal or rewrite a value."""
+    numeric=[r for r in result.get('regions',[]) if any(unicodedata.category(c).startswith('N') for c in r['text'])]
+    if not numeric:
+        return result
+    full_keys=[numeric_ocr_key(line) for line in full_lines]
+    kept=[];omitted=0
+    for region in result.get('regions',[]):
+        text=region['text']
+        if not any(unicodedata.category(c).startswith('N') for c in text):
+            kept.append(region);continue
+        key=numeric_ocr_key(text)
+        native=any(row.get('bbox')==region.get('bbox') and numeric_ocr_key(row['text'])==key for row in result.get('native_candidates',[]))
+        # A crop may be a literal fragment of a larger line, never a suffix of
+        # another number, decimal, signed amount, date, or identifier.
+        def han_label(char):
+            return unicodedata.name(char,'').startswith(('CJK UNIFIED IDEOGRAPH','CJK COMPATIBILITY IDEOGRAPH'))
+        def boundary_character(char,*,currency_left=False):
+            category=unicodedata.category(char)
+            if category[:1] in {'N','M'} or char in '.,:/+-_^−±⁺⁻₊₋':
+                return True
+            # Chinese labels/units may touch a literal number. Latin/Greek
+            # identifier letters still cannot turn a suffix into a new value.
+            if not currency_left and category.startswith('L'):
+                return not han_label(char)
+            return False
+        def literal_fragment(line):
+            if key==line:return True
+            start=0
+            while True:
+                at=line.find(key,start)
+                if at<0:return False
+                end=at+len(key)
+                left_ok=at==0 or han_label(key[:1]) or not boundary_character(line[at-1],currency_left=key[:1] in '$€£¥￥')
+                right_ok=end==len(line) or han_label(key[-1:]) or not boundary_character(line[end])
+                if left_ok and right_ok:return True
+                start=at+1
+        full=any(literal_fragment(line) for line in full_keys)
+        if native and full:
+            kept.append(region)
+        else:
+            omitted+=1
+    out=copy.deepcopy(result)
+    out['regions']=copy.deepcopy(kept)
+    out['text']='\n'.join(r['text'] for r in kept)
+    if omitted:
+        note=out.get('uncertainty','')
+        if not kept:
+            note=note.replace('仅收录通过独立逐字核对的片段；未保证完整转录画面内全部文字。','本次未保留经独立逐字核对的文字；不能据此断言画面没有文字。')
+        out['uncertainty']=(note+f' 数字格式复核：{omitted} 处含数字文字未获同一区域的本机 OCR、独立局部与全图读取三方一致，已省略；不推断小数点、上下标或单位。').strip()
+    out['numeric_consensus']={'policy':'same native region, independent region and full-image literal numeric-format agreement','checked_regions':len(numeric),'omitted_regions':omitted,'superscript_subscript_distinguished':True}
+    return out
+
+def transcribe_visible_text(path,args):
+    import json
+    from pathlib import Path
+    result=_transcribe_visible_text(path,args)
+    full=json.loads(Path(path).with_suffix('.ocr-candidates.json').read_text())
+    return enforce_numeric_ocr_consensus(result,full['lines'])
+
+def equipment_audience_pattern():
+    return r'(?:儿童|婴儿|成人|老年人|老人|残疾人|残障人士|残障人|病人|孕妇)(?:专用|适用|用|的)?(?=(?:电动)?(?:代步车|轮椅|购物车))'
+
+def equipment_audience_inference(text):
+    return bool(re.search(equipment_audience_pattern(),text))
+
+def omit_unverified_equipment_audience(record):
+    """A device's shape does not certify its intended user's age or health."""
+    fields=('summary','description','objects','spatial_relations','tags')
+    if not equipment_audience_inference(' '.join(v if isinstance(v,str) else ' '.join(v) for k in fields if (v:=record.get(k)) is not None)):
+        return record
+    out=copy.deepcopy(record);pattern=equipment_audience_pattern()
+    for key in fields:
+        value=out.get(key)
+        if isinstance(value,str):out[key]=re.sub(pattern,'',value)
+        elif isinstance(value,list):out[key]=list(dict.fromkeys(re.sub(pattern,'',v) for v in value))
+    note='器物仅保留外观类别；适用人群、使用者年龄与健康状况未确认。'
+    if note not in out.get('uncertainty_note',''):out['uncertainty_note']=(out.get('uncertainty_note','')+' '+note).strip()
+    out.setdefault('verification',{})['equipment_audience_omitted']=True
+    return out
+
+def unverified_depth_relation(text):
+    return bool(re.search(r'前方|后方|前面|后面|前侧|后侧',text))
+
+def omit_unverified_depth_relations(record):
+    """Enforce image-plane-only relations on prose as well as relation lists."""
+    fields=('summary','description','objects','spatial_relations','tags')
+    factual=' '.join(v if isinstance(v,str) else ' '.join(v) for k in fields if (v:=record.get(k)) is not None)
+    if not unverified_depth_relation(factual):
+        return record
+    out=copy.deepcopy(record)
+    for key in ('objects','spatial_relations','tags'):
+        out[key]=[v for v in out.get(key,[]) if not unverified_depth_relation(v)]
+    nouns=[]
+    for value in out['objects']:
+        if sum(len(v)+1 for v in nouns)+len(value)>85:break
+        nouns.append(value)
+        if len(nouns)==6:break
+    if not nouns:
+        raise ValueError('No supported subject remains after image-plane relation filtering')
+    fallback='画面可见'+'、'.join(nouns)+'。'
+    for key in ('summary','description'):
+        clauses=re.split(r'(?<=[。！？；;，,])',out.get(key,''))
+        kept=''.join(c for c in clauses if not unverified_depth_relation(c)).strip()
+        if kept:
+            kept=kept.rstrip('，,；; ')
+            if not re.search(r'[。！？.!?]$',kept):kept+='。'
+        out[key]=kept or fallback
+    note='单帧不确认物体的前后方位；有争议的相关描述已省略。'
+    if note not in out.get('uncertainty_note',''):out['uncertainty_note']=(out.get('uncertainty_note','')+' '+note).strip()
+    out.setdefault('verification',{})['unverified_depth_clauses_omitted']=True
+    return out
+
+
+def describe_workbench(path,args):
+    """Do not name confusable tiny parts or reconstruct wire topology."""
+    categories=['键盘','面包板','电路板','连接线','电子元件','塑料袋','手','桌面','屏幕','工具','指示灯']
+    colors=['黑色','白色','灰色','红色','橙色','黄色','绿色','蓝色','紫色','棕色','透明','未知']
+    positions=['上方','下方','左侧','右侧','左上方','右上方','左下方','右下方','中央','未知']
+    item={'type':'object','properties':{'category':{'type':'string','enum':categories},'color':{'type':'string','enum':colors},'position':{'type':'string','enum':positions}},'required':['category','color','position'],'additionalProperties':False}
+    schema={'type':'object','properties':{'objects':{'type':'array','minItems':0,'maxItems':12,'items':item},'has_readable_text':{'type':'boolean'}},'required':['objects','has_readable_text'],'additionalProperties':False}
+    prompt='独立观察电子工作台图片，列出有直接像素证据的主要物体大类。不要猜细小元件类型、设备功能、材质、接触动作、线材端点或电气连接。模糊的扁平连接物只用电子元件大类；线体清楚可见才选连接线。不要把灰色条纹猜成散热片、金属外壳或设备。不能确认颜色或图中粗略位置时选未知；颜色不能从邻近物体复制。只用给定枚举，不转录文字，不判断数量。只返回JSON。'
+    prompt+=' objects数组每项必须包含category、color、position三个字段。category可选：'+json.dumps(categories,ensure_ascii=False)+'；color可选：'+json.dumps(colors,ensure_ascii=False)+'；position可选：'+json.dumps(positions,ensure_ascii=False)+'。应列出清楚可辨的主要物体，不能因细小器件无法分类就把整个清单留空；确实无法辨认时才返回空数组。'
+    first=call(prompt,[path],schema,args,reasoning=True)
+    second=call('重新独立看图，不提供其他模型的答案。'+prompt,[path],schema,args,reasoning=True)
+    def group(rows):
+        out={}
+        for row in rows:out.setdefault(row['category'],[]).append(row)
+        return out
+    a,b=group(first['objects']),group(second['objects']);objects=[];relations=[];labels=[]
+    for category,rows in a.items():
+        if category not in b:continue
+        def agreed(key):
+            x={r[key] for r in rows};y={r[key] for r in b[category]}
+            return next(iter(x)) if len(x)==1 and x==y and '未知' not in x else ''
+        color=agreed('color');position=agreed('position');label=color+category
+        objects.append(label);labels.append(category)
+        if position and category!='连接线':relations.append(label+'位于画面'+position)
+    if not objects:
+        raise app.IndexErrorUser('Workbench subjects require independent visual review; no supported inventory intersection.')
+    summary='工作台画面，可见'+'、'.join(objects[:6])+'。'
+    description=summary+('；'.join(relations)+'。' if relations else '')
+    record={'summary':summary,'description':description,'objects':objects,'spatial_relations':relations,'tags':labels,'ocr_text':'',
+            'uncertainty_note':'工作台小器件仅保留双方独立确认的大类；未判断具体类型、功能、材质、接触动作或线材端点与电气连接。',
+            'verification':{'profile':PROFILE,'local_visual_review':'blind workbench inventories intersected','supervisor_visual_review':'not_performed','original_model_inputs_local':True,'fine_component_types_omitted':True,'wire_topology_omitted':True,'spatial_relations_scope':'coarse image-plane positions agreed by both inventories'}}
+    if first['has_readable_text'] or second['has_readable_text']:
+        ocr=transcribe_visible_text(path,args);record['ocr_text']=ocr['text'];record['ocr_verification']={k:v for k,v in ocr.items() if k not in {'text','native_candidates'}}
+        if ocr['uncertainty']:record['uncertainty_note']+=' 文字识别：'+ocr['uncertainty']
+    Path(path).with_suffix('.workbench-audit.json').write_text(json.dumps({'primary_inventory':first,'independent_inventory':second,'record':record},ensure_ascii=False,indent=2)+'\n')
+    return record
+
+
+def describe_group_inventory(path,args,*,readable_hint=False):
+    """Construct coarse group evidence without generative person clauses."""
+    categories=['人物','植物','树木','灌木','草地','树叶','落叶','花卉','树干','枝条','岩石','沙地','地面','天空','云','山地','山脊','海面','湖面','河流','水面','浪花','岛状陆地','岸边','步道','道路','台阶','栏杆','建筑','棚顶','长椅','轨道车辆','车辆','船只','行李箱','背包','包袋','相机','手机','桌子','椅子','屏幕','灯','旗帜','雕塑','板状物','滑板','冲浪板','球','自行车','乐器','文字','眼镜','帽子','口罩']
+    colors=['黑色','白色','灰色','红色','橙色','黄色','绿色','蓝色','紫色','棕色','透明','未知']
+    positions=['上方','下方','左侧','右侧','左上方','右上方','左下方','右下方','中央','未知']
+    item={'type':'object','properties':{'category':{'type':'string','enum':categories},'color':{'type':'string','enum':colors},'position':{'type':'string','enum':positions}},'required':['category','color','position'],'additionalProperties':False}
+    schema={'type':'object','properties':{'objects':{'type':'array','minItems':0,'maxItems':12,'items':item},'has_readable_text':{'type':'boolean'}},'required':['objects','has_readable_text'],'additionalProperties':False}
+    prompt='独立看图列出有充分像素证据的主要物体大类与环境。人物只选人物，不输出人数、性别、年龄、衣着、姿态、动作或表情。眼镜、帽子、口罩只选类别，不能归属个人。不要猜地点、季节、物种、用途、深度或材质。物体颜色与图中位置看不清就用未知，不从旁边物体复制颜色。不要转录文字。objects数组每项只含category、color、position。category可选：'+json.dumps(categories,ensure_ascii=False)+'；color可选：'+json.dumps(colors,ensure_ascii=False)+'；position可选：'+json.dumps(positions,ensure_ascii=False)+'。应列出清楚可辨的主要物体，不能因为无法确认个人细节就把环境清单留空；确实无法辨认才用空数组。只返回JSON。'
+    first=call(prompt,[path],schema,args,reasoning=True)
+    second=call('重新独立看图，不提供其他模型的答案。'+prompt,[path],schema,args,reasoning=True)
+    parents={'树木':'植物','灌木':'植物','草地':'植物','海面':'水面','湖面':'水面','河流':'水面','山脊':'山地','轨道车辆':'车辆','行李箱':'包袋','背包':'包袋','滑板':'板状物','冲浪板':'板状物'}
+    def group(rows):
+        out={}
+        for row in rows:out.setdefault(row['category'],[]).append(row)
+        for category,rows in list(out.items()):
+            parent=parents.get(category)
+            if parent:out.setdefault(parent,[]).append({'category':parent,'color':'未知','position':'未知'})
+        return out
+    a,b=group(first['objects']),group(second['objects']);special={'人物','眼镜','帽子','口罩'};accessories={'眼镜','帽子','口罩'}
+    common=[c for c in a if c in b];priority=['人物','行李箱','背包','轨道车辆','车辆','船只','相机','手机']
+    common=([c for c in priority if c in common]+[c for c in common if c not in priority])[:12]
+    objects=[];labels=[];relations=[];narrative=[]
+    for category in common:
+        def agreed(key):
+            x={r[key] for r in a[category]};y={r[key] for r in b[category]}
+            return next(iter(x)) if len(x)==1 and x==y and '未知' not in x else ''
+        color=agreed('color') if category not in special else '';position=agreed('position') if category not in special else '';label=color+category
+        objects.append(label);labels.append(category)
+        if category not in accessories:narrative.append(label)
+        if position:relations.append(label+'位于画面'+position)
+    if not narrative:raise app.IndexErrorUser('Group inventory requires independent visual review; no supported primary classes.')
+    summary='画面可见'+'、'.join(narrative[:6])+'。';relations=relations[:8]
+    record={'summary':summary,'description':summary+('；'.join(relations)+'。' if relations else ''),'objects':objects,'spatial_relations':relations,'tags':labels[:10],'ocr_text':'',
+            'uncertainty_note':'多人场景仅保留双方独立确认的主体与环境大类；未判断人数、个人衣着、性别、年龄、动作或配件归属与颜色。',
+            'verification':{'profile':PROFILE,'local_visual_review':'blind group inventories intersected','close_group_policy':True,'person_attributes':'individual attributes and counts omitted by construction','supervisor_visual_review':'not_performed','original_model_inputs_local':True,'spatial_relations_scope':'agreed coarse image-plane positions of non-person objects only'}}
+    if first['has_readable_text'] or second['has_readable_text'] or readable_hint:
+        ocr=transcribe_visible_text(path,args);record['ocr_text']=ocr['text'];record['ocr_verification']={k:v for k,v in ocr.items() if k not in {'text','native_candidates'}}
+        if ocr['uncertainty']:record['uncertainty_note']+=' 文字识别：'+ocr['uncertainty']
+    Path(path).with_suffix('.group-inventory-audit.json').write_text(json.dumps({'primary_inventory':first,'independent_inventory':second,'record':record},ensure_ascii=False,indent=2)+'\n')
+    return record
+
+
+def severely_dark(path):
+ from PIL import Image
+ import numpy as np
+ with Image.open(path) as im:
+  im=im.convert('RGB');im.thumbnail((128,128));a=np.asarray(im,dtype=float)
+ y=a @ np.array([.2126,.7152,.0722])
+ return float((y<64).mean())>=.85 and float(np.quantile(y,.9))<80
+
+def dim_detail_views(path):
+    """Deterministic exposure aid; no generated detail or color evidence."""
+    from PIL import Image
+    path=Path(path);view=path.with_name(path.stem+'-dim-view.jpg')
+    with Image.open(path) as image:
+        image=image.convert('RGB')
+        lut=[round(255*(value/255)**.5) for value in range(256)]
+        enhanced=image.point(lut*3)
+        assert enhanced.size==image.size
+        enhanced.save(view,quality=96)
+    return [path,view]
+
+
+def describe_dim_inventory(path,args):
+ categories=['人体局部','人物','猫','狗','动物','织物','建筑','灯光','植物','天空','水面','车辆','器物','屏幕','文字','自然景观']
+ positions=['上方','下方','左侧','右侧','左上方','右上方','左下方','右下方','中央','未知']
+ item={'type':'object','properties':{'category':{'type':'string','enum':categories},'position':{'type':'string','enum':positions}},'required':['category','position'],'additionalProperties':False}
+ schema={'type':'object','properties':{'objects':{'type':'array','maxItems':10,'items':item}},'required':['objects'],'additionalProperties':False}
+ prompt='独立查看这张严重欠曝的图片，只列出可靠可见的主体大类。只见肢体局部时统一用人体局部，不能区分手、脚、指趾、左右肢、动作或人体数量；只有完整躯干或头部结构清楚才用人物。猫或狗需要可靠头脸/身体结构，无法区分只用动物，深色团块不能证明动物。织物只代表能看到编织或花纹布面，不判断地毯、沙发、床单、衣物等用途。不要猜材质、颜色、接触动作、物种品种、情绪或目的。粗略画面位置不能确认则未知，不谈物体之间的关系。枚举之外的类别不输出；不转录文字。objects每项只含category和position。category可选：'+json.dumps(categories,ensure_ascii=False)+'；position可选：'+json.dumps(positions,ensure_ascii=False)+'。只输出JSON。'
+ views=dim_detail_views(path)
+ prompt+='\n'+'第一张为原图，第二张是同一像素进行统一亮度提升的辅助视图，尺寸和几何结构未变；两张不是两个场景。辅助图只帮助辨认轮廓和位置，不能据此推断颜色、材质或新增细节。应包含确实有结构证据的主要主体，不要因为某个局部无法细分就遗漏其他可确认主体。'
+ first=call(prompt,views,schema,args,reasoning=True)
+ second=call('重新独立看图，不提供其他模型的答案。'+prompt,views,schema,args,reasoning=True)
+ def grouped(rows):
+  out={}
+  for row in rows:out.setdefault(row['category'],[]).append(row)
+  for child in ('猫','狗'):
+   if child in out:out.setdefault('动物',[]).append({'category':'动物','position':'未知'})
+  return out
+ a,b=grouped(first['objects']),grouped(second['objects']);common=[c for c in a if c in b]
+ if any(c in common for c in ('猫','狗')):common=[c for c in common if c!='动物']
+ if not common:raise app.IndexErrorUser('Severely dark subjects need review; no independently supported class intersection.')
+ relations=[]
+ for category in common:
+  x={r['position'] for r in a[category]};y={r['position'] for r in b[category]}
+  if len(x)==1 and x==y and '未知' not in x:relations.append(category+'位于画面'+next(iter(x)))
+ summary='画面较暗，可辨认'+'、'.join(common[:6])+'。'
+ record={'summary':summary,'description':summary+('；'.join(relations)+'。' if relations else ''),'objects':common,'spatial_relations':relations,'tags':common,'ocr_text':'','uncertainty_note':'严重欠曝限制了细节可靠性；人体局部不区分手脚与指趾，不判断数量、颜色、材质、动作接触或织物用途。','verification':{'profile':PROFILE,'local_visual_review':'blind severely-dark inventories intersected','supervisor_visual_review':'not_performed','severely_dark_policy':True,'photometric_view':{'gamma':0.5,'geometry':'unchanged','color_inference':False},'anatomical_details_omitted':True,'textile_uses_omitted':True,'original_model_inputs_local':True,'spatial_relations_scope':'agreed coarse image-plane positions only'}}
+ return {'primary_inventory':first,'independent_inventory':second,'record':record}
+
+
+
+def dim_detail_risk(record):
+    facts=' '.join([record.get('summary',''),record.get('description',''),*record.get('objects',[]),*record.get('spatial_relations',[]),*record.get('tags',[])])
+    return bool(re.search(r'人手|手指|手掌|脚趾|脚掌|人脚|一只脚|双脚|赤脚|足部|指趾|肢体|前爪|后爪|爪子|地毯|沙发|床单',facts))
+
+
+def enforce_dim_detail_limits(path,record,args):
+    # A new independent inventory replaces disputed facts, never edits a rejected
+    # detailed candidate into a purportedly approved description. OCR stays literal.
+    if not dim_detail_risk(record) or not severely_dark(path):
+        return record
+    audit=describe_dim_inventory(path,args)
+    checked=audit['record']
+    for key in ('ocr_text','ocr_verification'):
+        if key in record:checked[key]=copy.deepcopy(record[key])
+    ocr_note=checked.get('ocr_verification',{}).get('uncertainty','')
+    if ocr_note:checked['uncertainty_note']+=' 文字识别：'+ocr_note
+    Path(path).with_suffix('.dim-detail-audit.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2)+'\n')
+    return checked
+
+
+def describe_disputed_scene(path,args,*,readable_hint=False):
+    """Repeated review disagreements require fresh, bounded class evidence."""
+    categories=list(dict.fromkeys(PANORAMA_OBJECTS+['交通信号灯','广告牌','海报','绘画','照片','图表','器物']))
+    schema={'type':'object','properties':{
+        'objects':{'type':'array','maxItems':16,'items':{'type':'string','enum':categories}},
+        'has_readable_text':{'type':'boolean'}},'required':['objects','has_readable_text'],'additionalProperties':False}
+    prompt='只选择这张图里有充分像素证据的主要主体和环境大类。不要猜细分车型、数量、颜色、材质、用途、身份、动作或空间关系；模糊物体不选。广告、海报、照片或屏幕内的图像不能当作现实人物或动物，只选相应载体类别。无法可靠区分就省略。不要抄文字。允许类别：'+json.dumps(categories,ensure_ascii=False)
+    first=call('独立清点图中可靠的大类，不提供先前描述。'+prompt,[path],schema,args,reasoning=True)
+    second=call('重新从原图独立判断，不参考其他清单。'+prompt,[path],schema,args,reasoning=True)
+    objects=list(dict.fromkeys(c for c in first['objects'] if c in categories and c in second['objects']))
+    if not objects:
+        raise app.IndexErrorUser('Disputed scene has no independently agreed visual classes.')
+    summary='画面可确认'+'、'.join(objects)+'。'
+    note='详细描述经多轮复核仍有分歧；仅保留两次独立清点共同支持的大类。具体数量、颜色、细分类别、动作和空间关系未可靠确认；这是不完整索引。'
+    record={'summary':summary,'description':summary+note,'objects':objects,'spatial_relations':[],
+        'tags':objects[:10],'ocr_text':'','uncertainty_note':note,
+        'verification':{'profile':PROFILE,'local_visual_review':'blind disputed-scene class inventories intersected',
+            'detail_review_exhausted':True,'visual_coverage':'limited',
+            'supervisor_visual_review':'not_performed','original_model_inputs_local':True}}
+    if readable_hint or first['has_readable_text'] or second['has_readable_text']:
+        ocr=transcribe_visible_text(path,args);record['ocr_text']=ocr['text']
+        record['ocr_verification']={k:v for k,v in ocr.items() if k not in {'text','native_candidates'}}
+        if ocr['uncertainty']:record['uncertainty_note']+=' 文字识别：'+ocr['uncertainty']
+    Path(path).with_suffix('.disputed-scene-audit.json').write_text(json.dumps({'primary_inventory':first,'independent_inventory':second,'record':record},ensure_ascii=False,indent=2)+'\n')
+    return record
+
+
+def describe_grounded(path,args,*,frame=False):
+    return omit_unverified_depth_relations(omit_unverified_equipment_audience(enforce_dim_detail_limits(path,_describe_grounded(path,args,frame=frame),args)))
+
+
+def _describe_grounded(path, args, *, frame=False):
     path = Path(path)
     prompt = INSTRUCTION + ('\n这是一个定时视频/动画帧。只能描述这一帧，不推断之前之后的动作。' if frame else '')
     from PIL import Image
@@ -375,6 +718,8 @@ def describe_grounded(path, args, *, frame=False):
         if projection['distorted_projection']:return describe_panorama(path,args)
         return describe_crowded_scene(path,args)
     record = normalize_record(call(prompt, [path], SCHEMA, args))
+    if '面包板' in json.dumps(record,ensure_ascii=False):
+        return describe_workbench(path,args)
     if is_distorted_panorama(record):
         return describe_panorama(path,args)
     people_objects=sum(bool(re.search(r'人物|男子|女子|男性|女性|[个名位]人',item)) for item in record['objects'])
@@ -412,6 +757,13 @@ def describe_grounded(path, args, *, frame=False):
         save_audit('reviewing')
         if qa['approved'] and not qa['issues']:
             break
+        if multiple and (attempt>=1 or qa['revised'] is None):
+            # Repeated binding errors are a signal to omit individual attributes,
+            # not to publish the last rejected rewrite or invent another one.
+            save_audit('detailed-group-needs-coarse-review')
+            coarse=describe_group_inventory(path,args,readable_hint=record['has_readable_text'])
+            coarse['verification']['detail_policy']='Individual attributes omitted after detailed-review rejection; environment independently re-read.'
+            return coarse
         if qa['revised'] is None:
             raise app.IndexErrorUser('Visual reviewer could not produce a supported record.')
         record = normalize_record(qa['revised'])
@@ -419,8 +771,8 @@ def describe_grounded(path, args, *, frame=False):
             fallback = INSTRUCTION + '\n前三次复核无法一致通过。请重新看全图与局部，仅保留最可靠的主体及清楚可见的衣着/颜色。省略有争议的细节与空间关系，description 限 60–100 字；不能省略场景主要主体。每个人的朝向独立判断，无法判断则不写朝向。不要引用先前的文字。'
             record = normalize_record(call(fallback, review_images, SCHEMA, args))
     else:
-        save_audit('needs-review')
-        raise app.IndexErrorUser('Visual quality gate needs manual review.')
+        save_audit('review-rejected-conservative-inventory')
+        return describe_disputed_scene(path,args,readable_hint=record['has_readable_text'])
     save_audit('locally-approved')
     if not record['summary'].strip() or not record['description'].strip():
         raise app.IndexErrorUser('Empty summary or description is not a successful index.')
@@ -466,7 +818,29 @@ def describe_animation(source, destination, args, *, progress):
             'animation_sampling':{'interval_ms':500,'sampled_frames':len(frames),'source_frames':len(times)}}
 
 
+class SummaryNeedsReview(app.IndexErrorUser):
+    pass
+
+
+def summary_has_unverified_scope(text,transcript):
+    if equipment_audience_inference(text) or unverified_depth_relation(text):
+        return True
+    # Missing accepted transcript text is a pipeline fact, not proof of silence.
+    # Other global absence/continuity claims cannot follow from sampled labels.
+    if not transcript:
+        text=re.sub(r'(?:全程|始终|一直)?(?:均|都)?(?:无|没有|未提供|未保留)(?:可靠|可用|经过核对的|经核对的|通过核对的)?(?:语音)?转录(?:文本|文字|内容)?','',text)
+    return bool(re.search(r'消失|离开|离去|离场|不见|不再|未见|未再|始终|一直|全程|从未|(?:随后|后来|最后|后段).{0,12}(?:没有|无|不在)|[零一二两三四五六七八九十百\d]+(?:个|段|种|幕)(?:不同的?)?(?:室内|室外|户外)?(?:场景|镜头|片段)',text))
+
+
 def summarize(frames, transcript, duration, args):
+    """Portable evidence view; do not invent events between sampled images."""
+    if not frames or any(not frame['summary'].strip() for frame in frames):
+        raise SummaryNeedsReview('Every sampled frame needs a non-empty evidence caption')
+    evidence='；'.join(app.time_label(frame['at_ms'])+' 采样：'+frame['summary'].strip() for frame in frames)
+    return app.time_label(0)+'–'+app.time_label(duration)+'：采样证据摘要摘录（时间为采样点，不是事件起止；语音见 transcript）：'+evidence
+
+
+def _summarize_reviewed(frames, transcript, duration, args):
     close_group_only=bool(frames) and all(f.get('verification',{}).get('close_group_policy') for f in frames)
     if frames and all(f.get('verification',{}).get('low_detail') for f in frames):
         subjects=list(dict.fromkeys(item for frame in frames for item in frame.get('objects',[])))[:8]
@@ -488,7 +862,7 @@ def summarize(frames, transcript, duration, args):
             if checked['approved'] and not checked['issues']:
                 return text
             rules+='\n上次摘要被拒，请仅保留证据中最确定的内容。需要纠正：'+json.dumps(checked['issues'],ensure_ascii=False)
-        raise app.IndexErrorUser('Summary evidence or timestamp consistency needs review')
+        raise SummaryNeedsReview('Summary evidence or timestamp consistency needs review')
     # Chunk all evidence. Never slice off the tail of a longer video.
     groups=[]
     for i in range(0,len(frames),8):

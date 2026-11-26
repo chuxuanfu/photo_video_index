@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "platform": "macOS-arm64",
+  "tools": {
+    "ffmpeg": {
+      "sha256": "4326303d3dffa5408a29d0ab7f71b7eeddd60146f3468e7dc2fe5587a25a8e1f",
+      "version": "ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers",
+      "runtime_relative_path": "runtime/native/ffmpeg",
+      "redistributed": false,
+      "license_probe_passed": true,
+      "system_dependency_count": 10,
+      "homebrew_dependencies": 0
+    },
+    "ffprobe": {
+      "sha256": "5ecdf02b43544edcf4ce5642888218505831f5af4166cfb6d37b92761cc755a5",
+      "version": "ffprobe version 8.1.2 Copyright (c) 2007-2026 the FFmpeg developers",
+      "runtime_relative_path": "runtime/native/ffprobe",
+      "redistributed": false,
+      "license_probe_passed": true,
+      "system_dependency_count": 10,
+      "homebrew_dependencies": 0
+    }
+  },
+  "official_source": "https://ffmpeg.org/releases/",
+  "binary_publisher": "not independently established for the inherited local executables; do not redistribute",
+  "tools_license_verified": "GPL version 3 or later"
+}

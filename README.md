@@ -1,3 +1,17 @@
+# MemorySearch 本机照片与视频搜索
+
+现版入口是根目录的 **MemorySearch-Open.command**。应用源代码、依赖清单和维护入口集中在本仓库；本机 Python、模型、配置与状态放在被 Git 忽略的 `runtime/`。原件与专用 `.memorysearch-index` 由本机配置分别连接，私人数据不进入 Git。
+
+- [中文 PDF SOP](docs/MemorySearch-SOP-zh-CN.pdf)
+- [可维护中文源稿](docs/MemorySearch-SOP-zh-CN.md)
+- [安装、迁移、依赖与验证](docs/MemorySearch-SETUP.md)
+
+保留原生 Gemma 召回和常驻。照片核验只分组，原 Top 10 成员可展开、可恢复原序，故障时自动回退；视频保持原生。目录整理与合成冒烟不是准确率验收。目标同步状态或索引迁移未确认时，继续旧入口，不切换生产。
+
+下面是仓库保留的早期独立工作流，仅供历史参考；请勿用它的建库命令操作现版索引。
+
+---
+
 # 本地照片与视频索引
 
 > 当前为实验版：软件检查不等于模型识别准确度。通用识别质量尚未完成独立验收，全库处理门禁保持关闭。见 [质量验证与限制](docs/QUALITY.md)。

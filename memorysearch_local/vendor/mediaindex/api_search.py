@@ -1,0 +1,692 @@
+# MemorySearch adapted packaging; see ../../THIRD-PARTY.md and vendor notices.
+"""Search API. Similarity values are raw cosine scores, not probabilities or confidence."""
+
+from __future__ import annotations
+
+import re
+import time
+from datetime import date, timedelta
+from typing import Literal
+
+import numpy as np
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
+
+from .media.images import IMAGE_EXTENSIONS, ImageRejected, load_image
+from .uploads import temp_upload
+from .model.backend import CapabilityUnavailable, ResourceError
+from .model.host import ModelBusy
+from .lookalikes import LEVELS, best_shot, group_lookalikes, sharpness
+from .photofilter import PhotoFilter
+from .places import place_levels, places_within
+from .search import MatrixCache, rank
+from .store import index_state
+
+MEDIA_MODALITIES = {"image": ["image"], "audio": ["audio"], "video": ["video-visual"]}
+VIDEO_SIGNALS = {"visual": "video-visual", "audio": "video-audio", "joint": "video-joint"}
+SIMILARITY_NOTE = ("similarity is raw cosine similarity between embeddings; it is not a probability or confidence, "
+                   "and nearest-neighbour search always returns candidates even when nothing truly matches")
+
+
+# "give me pictures of car" -> "car": the request words only blur the embedding
+REQUEST_RE = re.compile(r"^\s*(?:please\s+)?(?:(?:can|could)\s+(?:you|u)\s+)?(?:give me|show me|show|find me|find|"
+                        r"search for|search|look for|get me|i want|i need)?\s*(?:some\s+|the\s+|all\s+|all the\s+|my\s+)?"
+                        r"(?:pictures?|photos?|images?|pics?|shots?)\s+(?:of|with|showing|containing)\s+", re.I)
+REQUEST_ONLY_RE = re.compile(r"^\s*(?:please\s+)?(?:give me|show me|find me|find|search for|look for|get me)\s+", re.I)
+
+
+def clean_query(text: str) -> str:
+    t = REQUEST_RE.sub("", text.strip())
+    t = REQUEST_ONLY_RE.sub("", t).strip(" ?.!")
+    return t or text.strip()
+
+
+def object_first(app: FastAPI, out: dict, text: str, library_ids, limit: int) -> dict:
+    """When the query names one thing the object detector knows ("car"), photos where it found one go first; each
+    part stays in similarity order. Uses the detections stored by the Ask tab; photos it hasn't checked yet are
+    marked so. Approved by the maintainer for the Search tab, 2026-10-15."""
+    from .assistant import display, resolve_labels
+    from .detect import DETECTOR_KEY, SURE
+
+    labels = resolve_labels(text)
+    if len(labels) != 1:
+        return out
+    label = labels[0]
+    store = app.state.store
+    found = set(store.count_objects(DETECTOR_KEY, label, library_ids, sure=SURE)["asset_ids"])
+    results = out["results"]
+    checked = store.checked_hashes(DETECTOR_KEY, list({r["asset"]["content_hash"] for r in results
+                                                       if r["asset"].get("content_hash")}))
+    for r in results:
+        r["object_check"] = "found" if r["asset"]["id"] in found else \
+            "not found" if r["asset"].get("content_hash") in checked else "not checked"
+    order = {"found": 0, "not checked": 1, "not found": 1}
+    results = sorted(results, key=lambda r: order[r["object_check"]])[:limit]  # stable: similarity order kept
+    for i, r in enumerate(results):
+        r["rank"] = i + 1
+    out["results"] = results
+    out["object_check"] = {"label": label, "name": display(label), "found": sum(r["object_check"] == "found"
+                                                                                for r in results),
+                           "detector": DETECTOR_KEY}
+    return out
+
+
+class TextSearchRequest(BaseModel):
+    mode: Literal["text"] = "text"
+    text: str = Field(min_length=1, max_length=2000)
+    library_ids: list[str] | None = None
+    media_types: list[Literal["image", "audio", "video"]] = ["image"]
+    video_signal: Literal["visual", "audio", "joint"] = "visual"
+    limit: int = Field(24, ge=1, le=200)
+    group_segments: bool = True
+    global_rank: bool = False  # experimental: one list across media types by raw cosine
+    date_from: date | None = None  # photos taken on or after this day (EXIF date); others are left out
+    date_to: date | None = None  # ... and on or before this day
+    place: str | None = Field(None, max_length=300)  # taken in this town, region or country (a name from /api/places)
+
+
+def taken_filter(app: FastAPI, library_ids, date_from: date | None, date_to: date | None,
+                 place: str | None = None) -> tuple[set[str] | None, dict]:
+    """Photos and videos made in [date_from, date_to] and/or in `place` (a name from /api/places: a town, region or
+    country). Dates and places come from EXIF and video metadata; items without one never match."""
+    place = (place or "").strip() or None
+    if date_from is None and date_to is None and place is None:
+        return None, {}
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(422, "date_from is after date_to")
+    when = PhotoFilter()
+    if date_from or date_to:
+        end = (date_to + timedelta(days=1)).isoformat() if date_to else "9999-12-31"
+        when.ranges = [(date_from.isoformat() if date_from else "0000-01-01", end)]
+    store = app.state.store
+    if place is not None:
+        when.places = places_within(place, store.known_places(library_ids)) or [place]  # unknown: matches nothing
+    media = ("image", "video")
+    only = set(store.filtered_photos(library_ids, when, media))
+    gaps = store.photo_meta_gaps(library_ids, media)
+    return only, {"from": date_from.isoformat() if date_from else None, "to": date_to.isoformat() if date_to else None,
+                  "place": place, "photos": len(only),
+                  "undated_photos": gaps["undated"] if when.dated else 0,
+                  "unplaced_photos": gaps["unplaced"] if place else 0,
+                  "note": "dates and places come from the photos' EXIF and the videos' metadata; items without one, "
+                          "and sounds, are left out"}
+
+
+def embed_query(app: FastAPI, fn):
+    host = app.state.host
+    try:
+        with host.use(timeout=app.state.settings.query_wait_seconds) as backend:
+            t0 = time.perf_counter()
+            vec = fn(backend)
+            return vec, (time.perf_counter() - t0) * 1000
+    except ModelBusy as e:
+        raise HTTPException(503, str(e))
+    except CapabilityUnavailable as e:
+        raise HTTPException(422, str(e))
+    except ResourceError as e:
+        raise HTTPException(507, str(e))
+    except (OSError, RuntimeError) as e:
+        if not host.loaded:
+            raise HTTPException(503, f"model could not be loaded: {e}. Run this once in the MediaIndex folder: "
+                                     f"uv run python -m mediaindex setup")
+        raise
+
+
+def _overlap_frac(a, b) -> float:
+    if a.start_s is None or b.start_s is None:
+        return 0.0
+    inter = max(0.0, min(a.end_s, b.end_s) - max(a.start_s, b.start_s))
+    shorter = max(1e-9, min(a.end_s - a.start_s, b.end_s - b.start_s))
+    return inter / shorter
+
+
+def group_hits(hits, limit: int, max_extra: int = 5, max_overlap: float = 0.5):
+    """Group windows by source file: the best window per asset plus up to `max_extra` other windows that
+    overlap every already-kept window of that asset by less than `max_overlap` (overlap de-duplication;
+    with 50% window overlap, adjacent windows are merged into the better one)."""
+    best: dict[str, dict] = {}
+    order: list[str] = []
+    for h in hits:
+        g = best.get(h.asset_id)
+        if g is None:
+            if len(order) >= limit:
+                continue
+            best[h.asset_id] = {"hit": h, "others": [], "suppressed": 0}
+            order.append(h.asset_id)
+        elif len(g["others"]) < max_extra:
+            kept = [g["hit"], *g["others"]]
+            if all(_overlap_frac(h, k) < max_overlap for k in kept):
+                g["others"].append(h)
+            else:
+                g["suppressed"] += 1
+    return [best[a] for a in order]
+
+
+GLOBAL_RANK_NOTE = ("EXPERIMENTAL global ranking: images and sound windows are merged by raw cosine similarity. "
+                    "Similarity scales are not calibrated across media types, so this order can favour one type.")
+
+
+def run_search(app: FastAPI, *, mode: str, query_info: dict, vec, embed_ms: float, library_ids, media_types,
+               limit: int, exclude_assets: set[str] | None = None, group_segments: bool = True,
+               global_rank: bool = False, video_modality: str | None = None,
+               only_assets: set[str] | None = None) -> dict:
+    media_types = list(dict.fromkeys(media_types))
+    if len(media_types) > 1:
+        parts = [_search_one(app, mode=mode, query_info=query_info, vec=vec, embed_ms=embed_ms,
+                             library_ids=library_ids, media_types=[t], limit=limit, exclude_assets=exclude_assets,
+                             group_segments=group_segments, video_modality=video_modality, only_assets=only_assets)
+                 for t in media_types]
+        out = dict(parts[0])
+        out["candidates_searched"] = sum(p["candidates_searched"] for p in parts)
+        out["timing_ms"] = {"query_embedding": parts[0]["timing_ms"]["query_embedding"],
+                            "ranking": round(sum(p["timing_ms"]["ranking"] for p in parts), 3)}
+        out["index_state"] = {t: p["index_state"] for t, p in zip(media_types, parts)}
+        if global_rank:
+            merged = sorted((r for p in parts for r in p["results"]), key=lambda r: -r["similarity"])[:limit]
+            for i, r in enumerate(merged):
+                r["rank"] = i + 1
+            out["results"] = merged
+            out["grouping"] = "global (experimental)"
+            out["note"] = SIMILARITY_NOTE + ". " + GLOBAL_RANK_NOTE
+        else:
+            out["results"] = [r for p in parts for r in p["results"]]
+            out["groups"] = {t: len(p["results"]) for t, p in zip(media_types, parts)}
+            out["grouping"] = "by_modality"
+        out["media_types"] = media_types
+        return out
+    return _search_one(app, mode=mode, query_info=query_info, vec=vec, embed_ms=embed_ms, library_ids=library_ids,
+                       media_types=media_types, limit=limit, exclude_assets=exclude_assets,
+                       group_segments=group_segments, video_modality=video_modality, only_assets=only_assets)
+
+
+def _search_one(app: FastAPI, *, mode: str, query_info: dict, vec, embed_ms: float, library_ids, media_types,
+                limit: int, exclude_assets: set[str] | None = None, group_segments: bool = True,
+                video_modality: str | None = None, only_assets: set[str] | None = None) -> dict:
+    store = app.state.store
+    profile_key = app.state.profile.key
+    if library_ids:
+        for lid in library_ids:
+            if not store.get_library(lid):
+                raise HTTPException(404, f"library not found: {lid}")
+    state = index_state(store, profile_key, library_ids, list(media_types))
+    if state["state"] == "incompatible":
+        raise HTTPException(409, "the selected libraries were indexed with a different model profile; re-import to "
+                                 "reindex them with the current profile")
+    modalities = [m for t in media_types for m in MEDIA_MODALITIES[t]]
+    if video_modality and "video" in media_types:
+        modalities = [video_modality if m == "video-visual" else m for m in modalities]
+    cache: MatrixCache = app.state.matrix_cache
+    t0 = time.perf_counter()
+    vm = cache.get(profile_key, library_ids, modalities)
+    segmented = any(m != "image" for m in modalities)
+    if group_segments and segmented:
+        groups = group_hits(rank(vec, vm, max(limit * 12, 200), exclude_assets, only_assets), limit)
+    else:
+        groups = [{"hit": h, "others": []} for h in rank(vec, vm, limit, exclude_assets, only_assets)]
+    rank_ms = (time.perf_counter() - t0) * 1000
+    results = []
+    for g in groups:
+        h = g["hit"]
+        a = store.get_asset(h.asset_id)
+        if a is None:  # removed between ranking and lookup
+            continue
+        item = {"rank": len(results) + 1, "similarity": round(h.similarity, 5), "modality": h.modality,
+                "start_s": h.start_s, "end_s": h.end_s, "asset": app.state.public_asset(a),
+                "other_segments": [{"start_s": o.start_s, "end_s": o.end_s,
+                                    "similarity": round(o.similarity, 5)} for o in g["others"]],
+                "overlapping_windows_merged": g.get("suppressed", 0)}
+        if a["media_type"] == "video" and h.start_s is not None:
+            item["window_thumbnail_url"] = f"/api/assets/{a['id']}/window-thumbnail?start={h.start_s:.3f}"
+            for o in item["other_segments"]:
+                o["window_thumbnail_url"] = f"/api/assets/{a['id']}/window-thumbnail?start={o['start_s']:.3f}"
+        results.append(item)
+    return {
+        "mode": mode,
+        "media_types": list(media_types),
+        "grouping": "single",
+        "query": query_info,
+        "profile_key": profile_key,
+        "results": results,
+        "candidates_searched": len(vm.asset_ids),
+        "timing_ms": {"query_embedding": round(embed_ms, 2), "ranking": round(rank_ms, 3)},
+        "index_state": state,
+        "note": SIMILARITY_NOTE,
+    }
+
+
+def register(app: FastAPI) -> None:
+    register_timeline(app)
+    register_lookalikes(app)
+    register_reference(app)
+    register_mixed(app)
+    register_audio(app)
+    register_modes(app)
+    register_video(app)
+
+    @app.post("/api/search/text")
+    def search_text(req: TextSearchRequest) -> dict:
+        text = clean_query(req.text)
+        vec, ms = embed_query(app, lambda b: b.embed_query_texts([text])[0])
+        info = {"text": req.text}
+        if text != req.text.strip():
+            info["searched_for"] = text
+        if "video" in req.media_types:
+            info["video_signal"] = req.video_signal
+        only, taken = taken_filter(app, req.library_ids, req.date_from, req.date_to, req.place)
+        if taken:
+            info["taken"] = taken
+        images_only = list(dict.fromkeys(req.media_types)) == ["image"]
+        out = run_search(app, mode="text", query_info=info, vec=vec, embed_ms=ms,
+                         library_ids=req.library_ids, media_types=req.media_types,
+                         limit=max(req.limit * 4, 200) if images_only else req.limit,  # room to bring found ones up
+                         group_segments=req.group_segments, global_rank=req.global_rank,
+                         video_modality=VIDEO_SIGNALS[req.video_signal], only_assets=only)
+        if images_only:
+            out = object_first(app, out, text, req.library_ids, req.limit)
+            out["results"] = out["results"][:req.limit]
+        return out
+
+
+def _parse_libs(library_ids: str | None) -> list[str] | None:
+    if not library_ids:
+        return None
+    return [x for x in (s.strip() for s in library_ids.split(",")) if x]
+
+
+def _reference(app: FastAPI, file: UploadFile | None, asset_id: str | None):
+    """Context-managed reference resolution. Yields (image_or_None, content_hash, asset_or_None, info)."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def cm():
+        if (file is None) == (asset_id is None):
+            raise HTTPException(422, "provide exactly one of: an uploaded reference file, or asset_id")
+        if file is not None:
+            with temp_upload(file, app.state.settings.uploads_dir, IMAGE_EXTENSIONS) as (path, sha):
+                try:
+                    im = load_image(path)
+                except ImageRejected as e:
+                    reason = str(e).split(":")[0]  # never echo the private temp path
+                    raise HTTPException(422, f"invalid reference image ({reason}); use a JPEG, PNG or WebP file")
+                yield im, sha, None, {"reference": "upload", "filename": file.filename}
+            return
+        a = app.state.store.get_asset(asset_id)
+        if a is None:
+            raise HTTPException(404, "reference asset not found")
+        if a["media_type"] != "image":
+            raise HTTPException(422, "reference asset is not an image")
+        _, path = app.state.asset_path(asset_id)  # ID-based, root-restricted
+        try:
+            im = load_image(path)
+        except ImageRejected as e:
+            raise HTTPException(422, f"invalid reference image: {e}")
+        yield im, a["content_hash"], a, {"reference": "asset", "asset_id": asset_id, "rel_path": a["rel_path"]}
+
+    return cm()
+
+
+def _exclusions(app: FastAPI, ref_asset: dict | None, content_hash: str | None, include_identical: bool) -> set[str]:
+    if include_identical:
+        return set()
+    ex = {ref_asset["id"]} if ref_asset else set()
+    if content_hash:
+        ex |= {a["id"] for a in app.state.store.find_by_hash(content_hash)}
+    return ex
+
+
+def register_reference(app: FastAPI) -> None:
+    @app.post("/api/search/image")
+    def search_image(file: UploadFile | None = File(None), asset_id: str | None = Form(None),
+                     library_ids: str | None = Form(None), limit: int = Form(24, ge=1, le=200),
+                     include_identical: bool = Form(False),
+                     target: Literal["image", "audio", "video"] = Form("image"),
+                     date_from: date | None = Form(None), date_to: date | None = Form(None),
+                     place: str | None = Form(None, max_length=300)) -> dict:
+        only, taken = taken_filter(app, _parse_libs(library_ids), date_from, date_to, place)
+        with _reference(app, file, asset_id) as (im, sha, ref_asset, info):
+            stored = None
+            if ref_asset is not None:
+                stored = app.state.store.get_asset_vectors(ref_asset["id"], app.state.profile.key, "image")
+            if stored is not None:
+                vec, ms = stored[0], 0.0
+                info["embedding"] = "stored library vector"
+            else:
+                vec, ms = embed_query(app, lambda b: b.embed_images([im])[0])
+                info["embedding"] = "computed"
+        excl = _exclusions(app, ref_asset, sha, include_identical)
+        info["excluded_identical"] = len(excl)
+        if taken:
+            info["taken"] = taken
+        _mark_cross(info, "image", target)
+        return run_search(app, mode="image" if target == "image" else f"image→{target}", query_info=info, vec=vec,
+                          embed_ms=ms, library_ids=_parse_libs(library_ids), media_types=[target], limit=limit,
+                          exclude_assets=excl, only_assets=only)
+
+
+MIXED_INTERFACE = ("single forward pass: SentenceTransformer.encode({'text': query_prompt + text, 'image': <PIL image>}); "
+                   "not an average of separate text and image vectors")
+
+
+def register_mixed(app: FastAPI) -> None:
+    @app.post("/api/search/image-text")
+    def search_image_text(text: str = Form(..., min_length=1, max_length=2000),
+                          file: UploadFile | None = File(None), asset_id: str | None = Form(None),
+                          library_ids: str | None = Form(None), limit: int = Form(24, ge=1, le=200),
+                          include_identical: bool = Form(False),
+                          target: Literal["image", "audio", "video"] = Form("image"),
+                          date_from: date | None = Form(None), date_to: date | None = Form(None),
+                          place: str | None = Form(None, max_length=300)) -> dict:
+        text = text.strip()
+        if not text:
+            raise HTTPException(422, "refinement text is empty; use /api/search/image for reference-only search")
+        caps = app.state.host.capabilities()
+        if caps is not None and not caps.get("image+text"):
+            raise HTTPException(422, "native image+text queries are not available with the loaded encoders")
+        with _reference(app, file, asset_id) as (im, sha, ref_asset, info):
+            vec, ms = embed_query(app, lambda b: b.embed_image_text(im, text)[0])
+        profile = app.state.profile
+        info.update({
+            "text": text,
+            "embedding": "computed (native image+text)",
+            "interface": MIXED_INTERFACE,
+            "model": profile.model_id,
+            "revision": profile.revision,
+            "prompt": profile.query_prompt,
+            "caveat": ("refinement text steers the embedding; it does not enforce logical constraints, negation "
+                       "or exact attributes"),
+        })
+        excl = _exclusions(app, ref_asset, sha, include_identical)
+        info["excluded_identical"] = len(excl)
+        only, taken = taken_filter(app, _parse_libs(library_ids), date_from, date_to, place)
+        if taken:
+            info["taken"] = taken
+        _mark_cross(info, "image+text", target)
+        return run_search(app, mode="image+text" if target == "image" else f"image+text→{target}", query_info=info,
+                          vec=vec, embed_ms=ms, library_ids=_parse_libs(library_ids), media_types=[target],
+                          limit=limit, exclude_assets=excl, only_assets=only)
+
+
+# ---- audio reference search (Phase 12) ------------------------------------------------
+MAX_AUDIO_UPLOAD = 50 * 1024 * 1024
+
+
+def _audio_reference(app: FastAPI, file: UploadFile | None, asset_id: str | None, start_s: float | None):
+    """Yields (vector_or_None, decoded_array_or_None, content_hash, ref_asset, info)."""
+    from contextlib import contextmanager
+
+    from .media.audio import AUDIO_EXTENSIONS, SAMPLE_RATE, AudioRejected, decode_audio, probe_audio
+
+    profile = app.state.profile
+
+    @contextmanager
+    def cm():
+        if (file is None) == (asset_id is None):
+            raise HTTPException(422, "provide exactly one of: an uploaded reference sound, or asset_id")
+        if file is not None:
+            with temp_upload(file, app.state.settings.uploads_dir, AUDIO_EXTENSIONS, MAX_AUDIO_UPLOAD) as (path, sha):
+                try:
+                    info = probe_audio(path)
+                    s0 = max(0.0, min(start_s or 0.0, max(0.0, info.duration - 0.1)))
+                    dur = min(profile.audio_window_s, info.duration - s0)
+                    x = decode_audio(path, start=s0, duration=dur)
+                except AudioRejected as e:
+                    msg = str(e)
+                    if "not found" in msg:
+                        raise HTTPException(503, msg)
+                    raise HTTPException(422, f"invalid reference sound ({msg.split(':')[0]}); use WAV, FLAC or MP3")
+                if x.size < SAMPLE_RATE // 10:
+                    x = np.pad(x, (0, SAMPLE_RATE // 10 - x.size))
+                yield None, x, sha, None, {"reference": "upload", "filename": file.filename,
+                                           "reference_span": [round(s0, 3), round(s0 + dur, 3)],
+                                           "duration": round(info.duration, 3)}
+            return
+        a = app.state.store.get_asset(asset_id)
+        if a is None:
+            raise HTTPException(404, "reference asset not found")
+        if a["media_type"] != "audio":
+            raise HTTPException(422, "reference asset is not a sound")
+        rows = app.state.store.db.query(
+            """SELECT start_s, end_s, dim, vector FROM embeddings WHERE asset_id=? AND profile_key=? AND modality='audio'
+               ORDER BY segment_index""", (asset_id, profile.key))
+        if not rows:
+            raise HTTPException(409, "reference sound is not indexed with the current profile; re-import its library")
+        pick = rows[0]
+        if start_s is not None:  # the window containing start_s (closest start otherwise)
+            pick = min(rows, key=lambda r: (not (r["start_s"] <= start_s < r["end_s"]), abs(r["start_s"] - start_s)))
+        from .store import blob_to_vec
+
+        yield blob_to_vec(pick["vector"], pick["dim"]), None, a["content_hash"], a, {
+            "reference": "asset", "asset_id": asset_id, "rel_path": a["rel_path"],
+            "reference_span": [pick["start_s"], pick["end_s"]], "embedding": "stored segment vector"}
+
+    return cm()
+
+
+def register_audio(app: FastAPI) -> None:
+    @app.post("/api/search/audio")
+    def search_audio(file: UploadFile | None = File(None), asset_id: str | None = Form(None),
+                     start_s: float | None = Form(None, ge=0), library_ids: str | None = Form(None),
+                     limit: int = Form(24, ge=1, le=200), include_identical: bool = Form(False),
+                     target: Literal["audio", "image"] = Form("audio"),
+                     text: str | None = Form(None, max_length=2000)) -> dict:
+        text = (text or "").strip() or None
+        with _audio_reference(app, file, asset_id, start_s) as (vec, x, sha, ref_asset, info):
+            if text is not None:
+                if x is None:  # asset reference: re-decode exactly the chosen window
+                    x = _decode_ref_window(app, ref_asset, info["reference_span"])
+                vec, ms = embed_query(app, lambda b: b.embed_audio_text(x, text)[0])
+                info.update({"text": text, "embedding": "computed (native audio+text, single forward pass)",
+                             "caveat": "EXPERIMENTAL: refinement text steers the embedding; no logical constraints"})
+            elif vec is None:
+                vec, ms = embed_query(app, lambda b: b.embed_audio([x])[0])
+                info["embedding"] = "computed (audio encoder, mono 16 kHz)"
+            else:
+                ms = 0.0
+        excl = _exclusions(app, ref_asset, sha, include_identical)
+        info["excluded_identical"] = len(excl)
+        _mark_cross(info, "audio+text" if text else "audio", target)
+        mode = ("audio+text" if text else "audio") + ("" if target == "audio" else "→image")
+        return run_search(app, mode=mode, query_info=info, vec=vec, embed_ms=ms,
+                          library_ids=_parse_libs(library_ids), media_types=[target], limit=limit,
+                          exclude_assets=excl)
+
+
+def _decode_ref_window(app: FastAPI, asset: dict, span) -> np.ndarray:
+    from .media.audio import AudioRejected, decode_audio
+
+    _, path = app.state.asset_path(asset["id"])
+    try:
+        return decode_audio(path, start=span[0], duration=span[1] - span[0])
+    except AudioRejected as e:
+        raise HTTPException(422, f"cannot decode reference sound: {e}")
+
+
+# Supported query modes. "verified": exercised with real data in an earlier phase; "experimental":
+# runs on the shared embedding space but quality is unmeasured/uneven (see docs/cross-modal-findings.md).
+QUERY_MODES = [
+    {"query": "text", "target": "image", "status": "verified", "endpoint": "/api/search/text", "needs": ["image"]},
+    {"query": "text", "target": "audio", "status": "verified", "endpoint": "/api/search/text", "needs": ["audio"]},
+    {"query": "text", "target": "image+audio", "status": "verified (grouped by type)", "endpoint": "/api/search/text",
+     "needs": ["image", "audio"]},
+    {"query": "image", "target": "image", "status": "verified", "endpoint": "/api/search/image", "needs": ["image"]},
+    {"query": "image+text", "target": "image", "status": "verified (quality caveats)", "endpoint": "/api/search/image-text",
+     "needs": ["image"]},
+    {"query": "audio", "target": "audio", "status": "verified", "endpoint": "/api/search/audio", "needs": ["audio"]},
+    {"query": "image", "target": "audio", "status": "experimental", "endpoint": "/api/search/image", "needs": ["image", "audio"]},
+    {"query": "audio", "target": "image", "status": "experimental", "endpoint": "/api/search/audio", "needs": ["image", "audio"]},
+    {"query": "image+text", "target": "audio", "status": "experimental", "endpoint": "/api/search/image-text",
+     "needs": ["image", "audio"]},
+    {"query": "audio+text", "target": "audio", "status": "experimental", "endpoint": "/api/search/audio", "needs": ["audio"]},
+    {"query": "audio+text", "target": "image", "status": "experimental", "endpoint": "/api/search/audio",
+     "needs": ["image", "audio"]},
+    {"query": "text", "target": "video", "status": "verified", "endpoint": "/api/search/text", "needs": ["image"]},
+    {"query": "image", "target": "video", "status": "experimental", "endpoint": "/api/search/image", "needs": ["image"]},
+    {"query": "image+text", "target": "video", "status": "verified (quality caveats)", "endpoint": "/api/search/image-text",
+     "needs": ["image"]},
+    {"query": "video-window", "target": "audio", "status": "experimental", "endpoint": "/api/search/video-window",
+     "needs": ["image", "audio"]},
+    {"query": "video-window", "target": "video", "status": "verified", "endpoint": "/api/search/video-window",
+     "needs": ["image"]},
+]
+
+
+def _mark_cross(info: dict, query: str, target: str) -> None:
+    m = next((x for x in QUERY_MODES if x["query"] == query and x["target"] == target), None)
+    info["mode_status"] = m["status"] if m else "unsupported"
+    if m and m["status"] == "experimental":
+        info["experimental"] = True
+
+
+def register_timeline(app: FastAPI) -> None:
+    """Browse by date: which months have photos and videos, and a month's items in the shape of a search result."""
+    @app.get("/api/timeline")
+    def timeline(library_ids: str | None = None) -> dict:
+        months, undated = app.state.store.taken_months(_parse_libs(library_ids))
+        return {"months": months, "undated": undated}
+
+    @app.get("/api/timeline/{month}")
+    def timeline_month(month: str, library_ids: str | None = None, limit: int = 500) -> dict:
+        m = re.fullmatch(r"(\d{4})-(\d{2})", month)
+        if m is None or not 1 <= int(m.group(2)) <= 12:
+            raise HTTPException(422, "month must look like 2024-07")
+        start = date(int(m.group(1)), int(m.group(2)), 1)
+        end = date(start.year + start.month // 12, start.month % 12 + 1, 1)
+        return _listing(app, "timeline", _parse_libs(library_ids), PhotoFilter([(start.isoformat(), end.isoformat())]),
+                        {"month": month}, limit, "photos and videos taken this month (EXIF and video metadata), "
+                                                 "oldest first; not a search")
+
+    @app.get("/api/places/points")
+    def place_points(library_ids: str | None = None) -> dict:
+        """Map dots: each place where indexed photos and videos were taken, and how many have no place."""
+        libs = _parse_libs(library_ids)
+        store = app.state.store
+        return {"points": store.place_points(libs),
+                "unplaced": store.photo_meta_gaps(libs, ("image", "video"))["unplaced"]}
+
+    @app.get("/api/places/items")
+    def place_items(place: str, library_ids: str | None = None, limit: int = 500) -> dict:
+        """The photos and videos taken in a town, region or country (a name from /api/places), oldest first."""
+        libs = _parse_libs(library_ids)
+        within = places_within(place.strip(), app.state.store.known_places(libs)) or [place]
+        return _listing(app, "place", libs, PhotoFilter(places=within), {"place": place.strip()}, limit,
+                        "photos and videos taken here (named offline from GPS), oldest first; not a search")
+
+
+def _listing(app: FastAPI, mode: str, libs, when: PhotoFilter, query: dict, limit: int, note: str) -> dict:
+    """Items matching `when`, oldest first, in the shape of a search result (similarity None: not a search)."""
+    store = app.state.store
+    ids = store.filtered_photos(libs, when, ("image", "video"))
+    results = []
+    for aid in ids[:max(1, min(limit, 2000))]:
+        a = store.get_asset(aid)
+        results.append({"rank": len(results) + 1, "similarity": None, "modality": a["media_type"], "start_s": None,
+                        "end_s": None, "asset": app.state.public_asset(a), "other_segments": []})
+    return {"mode": mode, "media_types": ["image", "video"], "grouping": "single",
+            "query": {**query, "items": len(ids)}, "profile_key": app.state.profile.key, "results": results,
+            "candidates_searched": len(ids), "timing_ms": {"query_embedding": 0, "ranking": 0},
+            "index_state": index_state(store, app.state.profile.key, libs, ["image", "video"]), "note": note}
+
+
+def register_lookalikes(app: FastAPI) -> None:
+    @app.get("/api/lookalikes")
+    def lookalikes(level: Literal["strict", "normal", "loose"] = "normal", library_ids: str | None = None,
+                   limit: int = 1000) -> dict:
+        """Groups of look-alike photos (lookalikes.py), shaped like a search result. For review only: nothing is
+        deleted, moved or changed."""
+        libs = _parse_libs(library_ids)
+        store = app.state.store
+        vm = app.state.matrix_cache.get(app.state.profile.key, libs, ["image"])
+        t0 = time.perf_counter()
+        groups = group_lookalikes(vm.asset_ids, vm.matrix, LEVELS[level])
+        ms = (time.perf_counter() - t0) * 1000
+        results, info = [], []
+        for g, members in enumerate(groups, 1):
+            if len(results) + len(members) > max(2, min(limit, 5000)):
+                break
+            assets = [a for aid in members if (a := store.get_asset(aid)) is not None]
+            sharp = {a["id"]: _thumb_sharpness(app, a) for a in assets}
+            best = best_shot([(a["id"], sharp[a["id"]], (a["width"] or 0) * (a["height"] or 0)) for a in assets])
+            info.append({"group": g, "size": len(assets), "best": best,
+                         "identical": len({a["content_hash"] for a in assets}) == 1})
+            assets.sort(key=lambda a: a["id"] != best)  # the suggested keeper first
+            results += [{"rank": len(results) + 1, "similarity": None, "modality": "image", "start_s": None,
+                         "end_s": None, "asset": app.state.public_asset(a), "other_segments": [], "group": g,
+                         "sharpness": round(sharp[a["id"]], 1), "best": a["id"] == best}
+                        for a in assets]
+        return {"mode": "lookalikes", "media_types": ["image"], "grouping": "single",
+                "query": {"level": level, "threshold": LEVELS[level], "groups": len(groups),
+                          "photos": sum(len(g) for g in groups)},
+                "profile_key": app.state.profile.key, "results": results, "lookalike_groups": info,
+                "candidates_searched": len(vm.asset_ids), "timing_ms": {"query_embedding": 0, "ranking": round(ms, 1)},
+                "index_state": index_state(store, app.state.profile.key, libs, ["image"]),
+                "note": "photos whose image vectors are very close (cosine similarity, not confidence); review only, "
+                        "nothing is deleted"}
+
+
+def _thumb_sharpness(app: FastAPI, a: dict) -> float:
+    """Sharpness of the stored thumbnail (fast; same size for every photo, so comparable within a group)."""
+    from PIL import Image
+
+    from .ingest import thumb_path
+
+    try:
+        with Image.open(thumb_path(app.state.settings.thumbs_dir, a["content_hash"])) as im:
+            return sharpness(im)
+    except (OSError, TypeError):
+        return 0.0
+
+
+def register_modes(app: FastAPI) -> None:
+    @app.get("/api/places")
+    def places(library_ids: str | None = None) -> list[dict]:
+        """Where the indexed photos and videos were taken: each country, region and town, with how many items."""
+        return place_levels(app.state.store.place_counts(_parse_libs(library_ids)))
+
+    @app.get("/api/capabilities")
+    def capabilities() -> dict:
+        enc = set(app.state.profile.encoders)
+        modes = [dict(m, available=all(n in enc for n in m["needs"])) for m in QUERY_MODES]
+        return {"encoders": sorted(enc), "modes": modes,
+                "notes": ["Results are grouped by media type by default because raw similarity scales are not "
+                          "calibrated across images and sounds.", GLOBAL_RANK_NOTE,
+                          "A sound suggested for an image is a similarity candidate, not synchronization or a "
+                          "judgement of artistic quality."]}
+
+
+class VideoWindowQuery(BaseModel):
+    asset_id: str
+    start_s: float = Field(ge=0)
+    target: Literal["audio", "video", "image"] = "audio"
+    signal: Literal["visual", "audio", "joint"] = "visual"
+    library_ids: list[str] | None = None
+    limit: int = Field(24, ge=1, le=200)
+    include_same_video: bool = False
+
+
+def register_video(app: FastAPI) -> None:
+    from .store import blob_to_vec
+
+    @app.post("/api/search/video-window")
+    def search_from_video_window(q: VideoWindowQuery) -> dict:
+        """Use a stored video window's embedding as the query (e.g. suggest sounds for a moment)."""
+        a = app.state.store.get_asset(q.asset_id)
+        if a is None or a["media_type"] != "video":
+            raise HTTPException(404, "video asset not found")
+        modality = VIDEO_SIGNALS[q.signal]
+        rows = app.state.store.db.query(
+            """SELECT start_s, end_s, dim, vector FROM embeddings WHERE asset_id=? AND profile_key=? AND modality=?
+               ORDER BY segment_index""", (q.asset_id, app.state.profile.key, modality))
+        if not rows:
+            raise HTTPException(409, f"no {modality} vectors for this video under the current profile")
+        pick = min(rows, key=lambda r: (not (r["start_s"] <= q.start_s < r["end_s"]), abs(r["start_s"] - q.start_s)))
+        vec = blob_to_vec(pick["vector"], pick["dim"])
+        info = {"reference": "video-window", "asset_id": q.asset_id, "rel_path": a["rel_path"],
+                "reference_span": [pick["start_s"], pick["end_s"]], "signal": q.signal,
+                "embedding": f"stored {modality} window vector"}
+        _mark_cross(info, "video-window", q.target)
+        if q.target == "audio":
+            info["caveat"] = ("EXPERIMENTAL: suggested sounds are similarity candidates for this moment; they are not "
+                              "generated, timed or synchronized to the video")
+        excl = set() if q.include_same_video else {q.asset_id}
+        return run_search(app, mode=f"video-window→{q.target}", query_info=info, vec=vec, embed_ms=0.0,
+                          library_ids=q.library_ids, media_types=[q.target], limit=q.limit, exclude_assets=excl)

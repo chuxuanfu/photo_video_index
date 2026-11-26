@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "MEDIA_ROOT": "<MEDIA_ROOT>",
+  "INDEX_ROOT": "<MEDIA_ROOT>/.memorysearch-index",
+  "RUNTIME_PYTHON": "runtime/python/bin/python3",
+  "ENCODER_MODEL_ROOT": "runtime/models/embeddinggemma-2",
+  "VERIFIER_MODEL_ROOT": "runtime/models/verifier-4b",
+  "NATIVE_BIN_ROOT": "runtime/native",
+  "PORT": 19130,
+  "DEVICE": "mps",
+  "NO_SYNC_CONFIRMED": false,
+  "SCOPE": "production"
+}

@@ -26,3 +26,15 @@ __pycache__/
 /.venv-mlx.incompatible-*/
 /index.json
 /.local-*/
+
+# MemorySearch local resources: never publish runtime or user data.
+/runtime/
+/local-config.json
+/archive/
+/.memorysearch-index/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm

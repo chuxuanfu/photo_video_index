@@ -8,7 +8,7 @@ from memorysearch_local.config import Config,DEFAULT_CONFIG,LocalError,MESSAGES,
 from memorysearch_local.isolation import client_policy,runtime_environment,worker_policy,maintenance_policy
 
 
-PUBLIC_FIELDS={'schema','utc','pid','phase','scope','error_code','scan_complete','total','indexed','failed','pending','photos_indexed','videos_indexed','image_items','video_windows','model_calls','committed_batches','network_proof_passed','nonlocal_connect_attempts','dns_attempts','unexpected_probe_success','scope_skips','cloud_placeholders_skipped','unsupported_files_skipped'}
+PUBLIC_FIELDS={'result_limit_max','schema','utc','pid','phase','scope','error_code','scan_complete','total','indexed','failed','pending','photos_indexed','videos_indexed','image_items','video_windows','model_calls','committed_batches','network_proof_passed','nonlocal_connect_attempts','dns_attempts','unexpected_probe_success','scope_skips','cloud_placeholders_skipped','unsupported_files_skipped'}
 def emit(value):print(json.dumps(value,ensure_ascii=False,sort_keys=True))
 def health(config):
  try:
@@ -98,7 +98,7 @@ def _start_locked(config):
  worker_config={'state':str(config.state),'health':str(config.health),'port':config.port,'synthetic':config.synthetic,'root':str(config.media),'index_root':str(config.index),'device':config.device,'instance_id':instance,'backend_code':str(REPO/'memorysearch_local/vendor'),'resources':{'verifier_model_root':str(config.verifier),'policy':str(config.policy)}}
  private_write(config.state/'worker-config.json',worker_config)
  (config.state/'worker.sb').write_text(worker_policy(config))
- child=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(config.state/'worker.sb'),str(config.python),'-I',str(REPO/'memorysearch_local/worker.py'),str(config.state/'worker-config.json')],cwd=REPO,env=runtime_environment(config),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+ child=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(config.state/'worker.sb'),str(config.python),'-I',str(REPO/'memorysearch_local/worker.py'),str(config.state/'worker-config.json')],cwd=REPO/'memorysearch_local',env=runtime_environment(config),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
  private_write(config.state/'owner.json',{'pid':child.pid,'instance_id':instance})
  deadline=time.monotonic()+120
  while time.monotonic()<deadline:
@@ -123,15 +123,15 @@ def open_viewer(config,verify=False):
  if status.get('phase')!='ready':return status
  state=config.runtime/'client';state.mkdir(parents=True,exist_ok=True,mode=0o700)
  binary=config.runtime/'bin/NativePhotoViewer';box=state/'client.sb';box.write_text(client_policy(binary,state,config.port))
- env={'PATH':'/usr/bin:/bin','TMPDIR':str(state)+'/','MEMORYSEARCH_PORT':str(config.port),'DO_NOT_TRACK':'1','OTEL_SDK_DISABLED':'true'}
+ env={'PATH':'/usr/bin:/bin','TMPDIR':str(state)+'/','MEMORYSEARCH_PORT':str(config.port),'MEMORYSEARCH_CLIENT_STATE':str(state),'DO_NOT_TRACK':'1','OTEL_SDK_DISABLED':'true'}
  if verify:
   if not config.synthetic:raise LocalError('config_invalid')
-  result=subprocess.run(['/usr/bin/sandbox-exec','-f',str(box),str(binary),'--verify-synthetic'],cwd=REPO,env=env,capture_output=True,text=True,timeout=90)
+  result=subprocess.run(['/usr/bin/sandbox-exec','-f',str(box),str(binary),'--verify-synthetic'],cwd=state,env=env,capture_output=True,text=True,timeout=90)
   try:value=json.loads(result.stdout)
   except Exception:raise LocalError('start_failed') from None
   if result.returncode or value.get('passed') is not True:raise LocalError('start_failed')
   return value
- subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(box),str(binary)],cwd=REPO,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+ subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(box),str(binary)],cwd=state,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
  return {'opened':True,'phase':'ready','loopback_only':True}
 def run_maintenance(config,action):
  probe=probe_storage(config);storage_gate(config,probe)
@@ -146,7 +146,7 @@ def run_maintenance(config,action):
   prepare_environment(config)
  policy=config.state/'maintenance.sb';policy.write_text(maintenance_policy(config,source,discover=action.startswith('incremental')))
  interpreter=config.python if action=='incremental-apply' else Path('/usr/bin/python3')
- result=subprocess.run(['/usr/bin/sandbox-exec','-f',str(policy),str(interpreter),'-I',str(REPO/'memorysearch_local/maintenance.py'),action,str(config.file)],env=runtime_environment(config),capture_output=True,text=True,timeout=3600 if action=='incremental-apply' else 600)
+ result=subprocess.run(['/usr/bin/sandbox-exec','-f',str(policy),str(interpreter),'-I',str(REPO/'memorysearch_local/maintenance.py'),action,str(config.file)],cwd=REPO/'memorysearch_local',env=runtime_environment(config),capture_output=True,text=True,timeout=3600 if action=='incremental-apply' else 600)
  try:value=json.loads(result.stdout)
  except Exception:raise LocalError('start_failed') from None
  if result.returncode:

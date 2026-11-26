@@ -1,6 +1,6 @@
 # MemorySearch local installation and maintenance
 
-The current application is `memorysearch_local/`, launched by the root `MemorySearch-*.command` files. The pre-existing repository workflow and its files remain intact. Do not run its older setup/import commands to prepare this application or point its default index at an existing library.
+The current application is `memorysearch_local/`, launched by the root `MemorySearch-*.command` files. The owner-facing checkout is the existing `<CODE_CHECKOUT>`, not a Codex task staging checkout. The existing Desktop daily shortcut points to its ignored `runtime/daily` directory, whose entries resolve to the root launchers. The pre-existing repository workflow and its files remain intact. Do not run its older setup/import commands to prepare this application or point its default index at an existing library.
 
 ## Storage contract
 
@@ -76,3 +76,21 @@ The live smoke disables the photo visual model to avoid overlapping the user's G
 ## Public-release audit
 
 Use explicit file staging only. Check the complete staged diff and generated PDF text, metadata, fonts and every rendered page. Runtime/config/index/media/log/model files remain ignored, including tests generated at runtime. Never use force-add or force-push. Preserve remote main and all pre-existing files; push only the reviewed isolated release branch.
+
+## Result count and final local entry
+
+Use the existing owner-approved checkout as the daily entry, never a task staging directory. All actual machine locations remain in ignored local configuration.
+
+Native UI and the loopback HTML page offer 1–50 results, default 10. Only the integer is persisted; no query or result history is saved. Photo, video and mixed requests send `limit` through strict API validation, per-modality retrieval budgets, file grouping, final cap and photo-review jobs. Fewer available files are returned without padding. Default-10 order is unchanged. Mixed mode retains the existing backend global-score merge; it is not an accuracy claim. Videos never receive a photo confirmation.
+
+There is no cached query-result page. MatrixCache stores complete index matrices by profile/library/modality, independent of display count. Client request generations and review job IDs keep each submission separate.
+
+The generated-only `verify_limits.py` acceptance uses real native UI submissions, counts beyond ten, available-file shortages, strict invalid-input rejection, UI restart persistence, member-preserving grouping and fault fallback. Photo visual inference is not run by this engineering test. Public SOP uses placeholders; a local-only generated copy may fill them from ignored configuration.
+
+## Configurable results
+
+The native window and loopback HTML page accept 1–50 results, default 10, and persist only this integer locally. Photo, video and mixed requests carry it through API validation, each modality's candidate budget, file grouping, final cap and the review job. Video windows count as one file. Fewer available files are returned without padding. The existing default-10 ranking formula is unchanged. Mixed search uses the backend's existing global merge, with its usual cross-modal score limitations; videos do not receive photo-model confirmation.
+
+No query-result page is cached. MatrixCache caches the full index by profile, library and modality, so a former ten-item page cannot be reused for a larger limit. Each client submission and review job has its own generation/ID, including the requested count.
+
+Run `python3 memorysearch_local/verify_limits.py` for generated-only acceptance. It uses CPU, an independent loopback port, actual native controls, UI restart persistence, API limits through 50, shortage and failure fallback. Its grouping fixture is an interface test, not a visual accuracy label. The live photo model remains unchanged and may take longer for more candidates; timeout preserves all original members.

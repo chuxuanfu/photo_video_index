@@ -141,9 +141,10 @@ final class Painter {
             button("查看原图",margin+160,y+106,90)
             button("展开其他原始候选 · 2 个（未确认或未获支持）",margin+14,y+160,bodyWidth-28,30)
         } else {
-            button(kind == "VIDEO_SEARCH" ? "鸭子" : "帐篷",margin+14,y+13,242)
-            button(kind == "VIDEO_SEARCH" ? "视频内部画面 ▾" : "照片 ▾",margin+266,y+13,137)
-            button("查找",margin+414,y+13,74)
+            button(kind == "VIDEO_SEARCH" ? "鸭子" : "帐篷",margin+14,y+13,188)
+            button(kind == "VIDEO_SEARCH" ? "视频内部画面 ▾" : "照片 ▾",margin+212,y+13,116)
+            button("数量 10",margin+338,y+13,80)
+            button("查找",margin+428,y+13,60)
             if kind == "VIDEO_SEARCH" {
                 _ = text("1 · 演示视频（合成示意）",x:margin+14,y:y+52,width:bodyWidth-28,size:11)
                 button("播放视频",margin+14,y+79,92)

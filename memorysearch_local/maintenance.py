@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import errno,hashlib,json,os,re,shutil,socket,sqlite3,sys,time,uuid
 STAGE='initializing'
-sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from memorysearch_local.config import load,private_write
-from memorysearch_local.discovery import walk_media
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from config import load,private_write
+from discovery import walk_media
 
 def network_proof():
  blocked=0
@@ -50,6 +50,9 @@ def backup(config):
  config.index.mkdir(mode=0o700)
  pending=config.index/'mediaindex.sqlite3.pending';target=config.index/'mediaindex.sqlite3'
  begin=time.monotonic();copied=0;missing=0
+ def checkpoint(phase,total=None):
+  private_write(config.runtime/'migration-progress.json',{'schema':1,'phase':phase,'thumbs_copied':copied,'source_missing_thumbs':missing,'expected_thumbnails':total,'elapsed_s':round(time.monotonic()-begin,2),'private_paths_exported':False})
+ checkpoint('snapshot')
  try:
   original=connect_readonly(source/'mediaindex.sqlite3');original.execute('BEGIN')
   before=counts(original)
@@ -77,6 +80,8 @@ def backup(config):
    if artifact.exists():artifact.unlink()
   # Only thumbnails referenced by indexed assets are copied. No originals, logs,
   # job markers, caches or arbitrary source-directory members are enumerated.
+  total=original.execute("SELECT COUNT(DISTINCT content_hash) FROM assets WHERE status='indexed' AND media_type IN ('image','video')").fetchone()[0]
+  checkpoint('copying_required_thumbnails',total)
   hashes=original.execute("SELECT DISTINCT content_hash FROM assets WHERE status='indexed' AND media_type IN ('image','video')")
   for (content_hash,) in hashes:
    if not isinstance(content_hash,str) or not re.fullmatch('[0-9a-f]{64}',content_hash):raise RuntimeError('thumbnail_hash_invalid')
@@ -86,13 +91,16 @@ def backup(config):
    if old.is_symlink() or not old.is_file():raise RuntimeError('thumbnail_scope')
    new=config.index/'thumbs'/relative;new.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
    shutil.copyfile(old,new);new.chmod(0o600);copied+=1
+   if copied%256==0:checkpoint('copying_required_thumbnails',total)
   original.execute('ROLLBACK');original.close()
   os.replace(pending,target)
   private_write(config.index/'READY.json',{'schema':1,'snapshot_verified':True,'counts':after,'thumbnail_files':copied,'source_preserved':True})
+  checkpoint('complete',total)
   return {'schema':1,'passed':True,'counts_before':before,'counts_after':after,'thumbs_copied':copied,'source_missing_thumbs':missing,'sqlite_backup_used':True,'source_preserved':True,'private_paths_exported':False,'elapsed_s':round(time.monotonic()-begin,3)}
  except Exception:
   # Remove only this newly created, incomplete destination. Never touch source.
   shutil.rmtree(config.index)
+  checkpoint('failed')
   raise
 
 def incremental_dry_run(config):
@@ -129,7 +137,7 @@ def main():
  if sys.argv[1]=='migrate':result=backup(config)
  elif sys.argv[1]=='incremental-dry-run':result=incremental_dry_run(config)
  else:
-  from memorysearch_local.incremental import apply
+  from incremental import apply
   result=apply(config)
  if original_read_blocked is not None:result['original_read_blocked']=original_read_blocked
  result['network_proof_passed']=True;result['blocked_network_probes']=blocked

@@ -5,7 +5,7 @@ from .config import REPO,LocalError
 
 def q(path):return json.dumps(str(path))
 def worker_policy(config):
- reads=[REPO,config.media,config.index,config.python.parent.parent,config.encoder,config.verifier,config.native]
+ reads=[REPO/'memorysearch_local',config.runtime,config.media,config.index,config.python.parent.parent,config.encoder,config.verifier,config.native]
  sub=' '.join('(subpath '+q(p)+')' for p in reads)
  writable=' '.join('(subpath '+q(p)+')' for p in [config.runtime,config.index])
  return ('(version 1)\n(allow default)\n(deny network-outbound)\n'
@@ -29,7 +29,7 @@ def client_policy(binary,state,port):
   '(deny file-write* (require-not (require-any (subpath '+q(state)+') (literal "/dev/null"))))\n')
 
 def maintenance_policy(config,source,*,discover=False):
- reads=[REPO,config.runtime,config.index,source]+([config.media] if discover else [])
+ reads=[REPO/'memorysearch_local',config.file,config.runtime,config.index,source,config.python.parent.parent,config.encoder,config.verifier,config.native]+([config.media] if discover else [])
  readable=' '.join('(subpath '+q(p)+')' for p in reads)
  writable=' '.join('(subpath '+q(p)+')' for p in [config.runtime,config.index])
  original_boundary='' if discover else '(deny file-read-data (require-all (subpath '+q(config.media)+') (require-not (require-any (subpath '+q(config.index)+') (subpath '+q(source)+')))))\n'

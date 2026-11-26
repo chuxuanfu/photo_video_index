@@ -69,7 +69,7 @@ class Config:
  def policy(self):return self.runtime/'photo-review-policy.json'
 
 def load(path=DEFAULT_CONFIG):
- path=Path(path)
+ path=Path(path).absolute().absolute()
  if not path.is_file() or path.is_symlink():raise LocalError('config_missing')
  s=path.stat()
  if s.st_uid!=os.getuid() or stat.S_IMODE(s.st_mode)&0o077:raise LocalError('config_permissions')

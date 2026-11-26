@@ -31,9 +31,9 @@ def counts():
 def health():
     assert PHASE in ALLOWED_PHASES
     v={'schema':1,'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
-       'pid':os.getpid(),'instance_id':CFG['instance_id'],'phase':PHASE,'scope':'synthetic' if CFG['synthetic'] else 'authorized_memory',
+       'result_limit_max':50,'pid':os.getpid(),'instance_id':CFG['instance_id'],'phase':PHASE,'scope':'synthetic' if CFG['synthetic'] else 'authorized_memory',
        'elapsed_s':round(time.monotonic()-START,2),'error_code':ERROR,
-       'scan_complete':(INDEX/'READY.json').exists() or (S/'scan-complete').exists(), **counts(), **COUNTS,
+       'result_limit_max':50,'scan_complete':(INDEX/'READY.json').exists() or (S/'scan-complete').exists(), **counts(), **COUNTS,
        'network_proof_passed':(S/'network-proof.json').exists(),
        'nonlocal_connect_attempts':NET['nonlocal_connect_attempts'],
        'dns_attempts':NET['dns_attempts'], 'unexpected_probe_success':NET['unexpected_probe_success']}
@@ -209,15 +209,11 @@ def main():
         batch.profile_key=native.profile_key;batch.modality=native.modality;CORE.state.embed_batch=batch
     import mediaindex.api_search as api_search
     from mediaindex.search import rank
-    # Reuse the published file-top10 fix rather than truncating 200 windows.
+    from search_limits import FILE_LIMIT,validate_limit,rank_files
+    # Expand window candidates until the requested number of unique files is
+    # available. Default 10 retains the existing order and numerical scores.
     def rank_complete(q,vm,limit,exclude_assets=None,only_assets=None):
-        if limit==200 or limit==120:
-            budget=min(limit,len(vm.asset_ids));need=min(10,len(set(vm.asset_ids)))
-            while True:
-                hits=rank(q,vm,budget,exclude_assets,only_assets)
-                if len({h.asset_id for h in hits})>=need or budget>=len(vm.asset_ids):return hits
-                budget=min(len(vm.asset_ids),max(budget+1,budget*2))
-        return rank(q,vm,limit,exclude_assets,only_assets)
+        return rank_files(rank,q,vm,limit,exclude_assets,only_assets)
     api_search.rank=rank_complete
     import uvicorn
     from fastapi import FastAPI,HTTPException,Request
@@ -242,12 +238,18 @@ def main():
     @app.post('/search')
     async def search(request:Request):
         body=await request.json();text=body.get('text','');mode=body.get('mode','image')
-        if not isinstance(text,str) or not text.strip() or len(text)>500 or mode not in ('image','video'):raise HTTPException(422,'invalid_query')
+        if not isinstance(text,str) or not text.strip() or len(text)>500 or mode not in ('image','video','mixed'):raise HTTPException(422,'invalid_query')
+        try:limit=validate_limit(body.get('limit',10))
+        except ValueError:raise HTTPException(422,'result_limit_1_to_50')
         vec,ms=api_search.embed_query(CORE,lambda b:b.embed_query_texts([text.strip()])[0])
-        out=api_search.run_search(CORE,mode='text',query_info={},vec=vec,embed_ms=ms,library_ids=[LID],media_types=[mode],limit=10,video_modality='video-visual')
-        assert len(out['results'])<=10 and len({r['asset']['id'] for r in out['results']})==len(out['results'])
-        if mode=='image':
-            jid=photo.submit(text.strip(),out['results'],fault=body.get('_public_fault') if CFG['synthetic'] else None,native_only=bool(body.get('_public_native_only')) if CFG['synthetic'] else False)
+        token=FILE_LIMIT.set(limit)
+        try:
+            out=api_search.run_search(CORE,mode='text',query_info={},vec=vec,embed_ms=ms,library_ids=[LID],media_types=['image','video'] if mode=='mixed' else [mode],limit=limit,global_rank=mode=='mixed',video_modality='video-visual')
+        finally:FILE_LIMIT.reset(token)
+        out['requested_limit']=limit
+        assert len(out['results'])<=limit and len({r['asset']['id'] for r in out['results']})==len(out['results'])
+        if mode in ('image','mixed') and any(row['asset']['media_type']=='image' for row in out['results']):
+            jid=photo.submit(text.strip(),out['results'],limit=limit,fault=body.get('_public_fault') if CFG['synthetic'] else None,native_only=bool(body.get('_public_native_only')) if CFG['synthetic'] else False)
             out['photo_review_job']=jid
             out['photo_review_default']=photo.enabled()
         return out
@@ -265,7 +267,7 @@ def main():
         if not isinstance(body,dict) or set(body)-allowed:raise HTTPException(422)
         for key,value in body.items():
             if key=='mode':
-                if value not in ('image','video'):raise HTTPException(422)
+                if value not in ('image','video','mixed'):raise HTTPException(422)
             elif key=='fallback':
                 if not isinstance(value,bool):raise HTTPException(422)
             elif value is not None and (not isinstance(value,(float,int)) or isinstance(value,bool) or value<0 or value>3600000):raise HTTPException(422)

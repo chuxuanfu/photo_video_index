@@ -2,9 +2,14 @@
 from pathlib import Path
 from dataclasses import replace
 import fcntl,os,signal,sqlite3,sys,threading,time
-from .maintenance import counts,connect_readonly
-from .config import private_write
-from .discovery import walk_media
+if __package__:
+ from .maintenance import counts,connect_readonly
+ from .config import private_write
+ from .discovery import walk_media
+else:
+ from maintenance import counts,connect_readonly
+ from config import private_write
+ from discovery import walk_media
 
 def apply(config):
  os.umask(0o077)

@@ -1,20 +1,21 @@
 """Default photo presentation review. Private jobs stay in process RAM and loopback.
 
-Native search and file membership are untouched. Only an existing Top10 photo
+Native search and file membership are untouched. Only a photo from the requested native page (1–50)
 may be decoded. Missing/failed evidence never deletes a native candidate.
 """
 from pathlib import Path
 import copy,json,time,threading,queue,uuid,collections
 
 def aid(row):return row['asset']['id']
-def projection(rows,decisions=None,*,pending=False,fallback=None):
+def projection(rows,decisions=None,*,pending=False,fallback=None,limit=10):
     original=copy.deepcopy(rows)
-    if len(original)>10 or len({aid(x) for x in original})!=len(original):raise ValueError('native_page_contract')
+    if not isinstance(limit,int) or isinstance(limit,bool) or not 1<=limit<=50 or len(original)>limit or len({aid(x) for x in original})!=len(original):raise ValueError('native_page_contract')
     if fallback:
         return dict(results=original,original_results=copy.deepcopy(original),confirmed=[],remaining=[],photo_review=dict(stage='fallback',reason=fallback,complete=True))
     yes=[];rest=[];decisions=decisions or {}
     for row in copy.deepcopy(rows):
         d=decisions.get(aid(row),'PENDING');d=d if d in ('PASS','FAIL','UNKNOWN','PENDING') else 'UNKNOWN'
+        if row['asset'].get('media_type')=='video':d='UNKNOWN'
         row['photo_review_decision']=d
         (yes if d=='PASS' else rest).append(row)
     return dict(results=yes+rest,original_results=original,confirmed=yes,remaining=rest,photo_review=dict(stage='verifying' if pending else 'complete',complete=not pending))
@@ -33,7 +34,7 @@ class PhotoReview:
         except Exception:return False
     def status(self):
         with self.lock:return dict(schema=1,enabled=self.enabled(),model_loaded=self.gate is not None,queued=self.todo.qsize(),**self.stats)
-    def submit(self,text,rows,*,fault=None,native_only=False):
+    def submit(self,text,rows,*,limit=10,fault=None,native_only=False):
         if not self.enabled() or self.synthetic and native_only:return None
         jid=uuid.uuid4().hex
         with self.lock:
@@ -41,7 +42,7 @@ class PhotoReview:
                 old=next((k for k,v in self.jobs.items() if v['out']['photo_review']['complete']),None)
                 if old is None:self.stats['queue_refusals']+=1;return None
                 del self.jobs[old]
-            job=dict(text=text,rows=copy.deepcopy(rows),fault=fault if self.synthetic else None,begin=time.monotonic(),out=projection(rows,pending=True))
+            job=dict(text=text,rows=copy.deepcopy(rows),limit=limit,fault=fault if self.synthetic else None,begin=time.monotonic(),out=projection(rows,pending=True,limit=limit))
             try:self.todo.put_nowait((jid,job))
             except queue.Full:self.stats['queue_refusals']+=1;return None
             self.jobs[jid]=job
@@ -51,7 +52,7 @@ class PhotoReview:
             job=self.jobs.get(jid)
             if job is None:return None
             if time.monotonic()-job['begin']>40 and not job['out']['photo_review']['complete']:
-                job['out']=projection(job['rows'],fallback='timeout');self.stats['fallbacks']+=1
+                job['out']=projection(job['rows'],fallback='timeout',limit=job['limit']);self.stats['fallbacks']+=1
             return copy.deepcopy(job['out'])
     def get_gate(self):
         if self.gate_failed:raise RuntimeError('verifier_unavailable')
@@ -72,6 +73,8 @@ class PhotoReview:
                 for row in job['rows']:
                     with self.lock:
                         if job['out']['photo_review']['complete']:break
+                    if row['asset'].get('media_type')=='video':
+                        decisions[aid(row)]='UNKNOWN';continue
                     if job['fault']=='error':raise RuntimeError('injected_boundary_failure')
                     if job['fault']=='timeout' or time.monotonic()-job['begin']>40:raise TimeoutError()
                     # Lock shared with the resident native encoder, including model
@@ -92,16 +95,16 @@ class PhotoReview:
                     if d=='PASS' and first is None:first=time.monotonic()-job['begin']
                     with self.lock:
                         if not job['out']['photo_review']['complete']:
-                            job['out']=projection(job['rows'],decisions,pending=True)
+                            job['out']=projection(job['rows'],decisions,pending=True,limit=job['limit'])
                             job['out']['photo_review'].update(completed=len(decisions),total=len(job['rows']),first_confirmed_s=first)
                 with self.lock:
                     if not job['out']['photo_review']['complete']:
-                        job['out']=projection(job['rows'],decisions)
+                        job['out']=projection(job['rows'],decisions,limit=job['limit'])
                         job['out']['photo_review'].update(completed=len(decisions),total=len(job['rows']),first_confirmed_s=first,wall_s=time.monotonic()-job['begin'])
             except Exception as exc:
                 with self.lock:
                     why='timeout' if isinstance(exc,TimeoutError) else 'verifier_unavailable'
-                    job['out']=projection(job['rows'],fallback=why);self.stats['fallbacks']+=1
+                    job['out']=projection(job['rows'],fallback=why,limit=job['limit']);self.stats['fallbacks']+=1
             finally:
                 with self.lock:
                     self.stats['completed']+=1;self.stats['active']=0
